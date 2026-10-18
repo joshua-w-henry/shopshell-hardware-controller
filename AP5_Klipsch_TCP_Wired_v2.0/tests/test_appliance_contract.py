@@ -35,7 +35,9 @@ assert "WaitingForKlipschOptical" in MAIN
 assert "viewSonic.setMute(false)" in MAIN
 assert "MAX_QUEUE = 96" in KLIPSCH
 assert "viewSonic.setStandby()" in MAIN
-assert "ShopShell_Hardware_Controller_v2.3" in MAIN
+assert "acceptSuccessfulWriteWithoutReply" in VIEWSONIC
+assert '"sent_no_ack"' in VIEWSONIC
+assert "ShopShell_Hardware_Controller_v2.4" in MAIN
 
 # Cold-boot safety invariant: the gain ramp cannot begin until deterministic
 # ViewSonic mute has succeeded. A slow ViewSonic must be retried rather than
