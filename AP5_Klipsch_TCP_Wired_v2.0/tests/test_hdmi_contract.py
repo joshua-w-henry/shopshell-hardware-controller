@@ -27,7 +27,7 @@ for route in (
 assert "STARTUP_HDMI_DELAY_MS" in MAIN
 assert "STARTUP_HDMI_REASSERT_DELAY_MS" in MAIN
 assert "selectHdmiDell();" in MAIN
-assert "ShopShell_Hardware_Controller_v2.1" in MAIN
+assert "ShopShell_Hardware_Controller_v2.2" in MAIN
 
 assert '"/panel/power/' not in MAIN
 assert '"/panel/input/' not in MAIN
