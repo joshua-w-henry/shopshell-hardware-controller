@@ -30,12 +30,12 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
 <body>
 <header>
   <div class="topline">
-    <div><div class="eyebrow">ShopShell | Commissioning</div><h1>HDMI Switch + Klipsch Control Console</h1><p>Hardware Controller v2.1 · 3-input HDMI switch · Klipsch R-15PM wired NEC · Dell browser test tool</p></div>
+    <div><div class="eyebrow">ShopShell | Commissioning</div><h1>HDMI Switch + Klipsch Control Console</h1><p>Hardware Controller v2.2 · 3-input HDMI switch · Klipsch R-15PM wired NEC · Dell browser test tool</p></div>
     <div class="connection"><div><label for="host">ESP32 address</label><div><input class="host" id="host" spellcheck="false" value="192.168.87.42" aria-label="ESP32 IP address or hostname"></div></div><button class="soft" id="healthTop">Open health</button></div>
   </div>
 </header>
 <main>
-<div class="info">This file runs directly on the Dell after flashing <strong>ShopShell Hardware Controller v2.1</strong>. Commands are sent by browser POST forms to the ESP32; returned JSON is displayed below. Because the page is local and the ESP32 is another origin, it cannot automatically interpret the response or know whether the HDMI switch or speakers physically responded. Record Pass/Fail after observing each action.</div>
+<div class="info">This file runs directly on the Dell after flashing <strong>ShopShell Hardware Controller v2.2</strong>. Commands are sent by browser POST forms to the ESP32; returned JSON is displayed below. Because the page is local and the ESP32 is another origin, it cannot automatically interpret the response or know whether the HDMI switch or speakers physically responded. Record Pass/Fail after observing each action.</div>
 <div class="cols" style="margin-top:17px">
   <section>
     <div class="card">
@@ -56,12 +56,22 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
       <div class="row"><button class="soft small" id="copyTcp">Copy Windows TCP check</button><span class="subtle">Port 2323 (general RS-232 bridge)</span></div>
     </div>
     <div class="card">
+      <div class="card-head"><h2>ViewSonic + appliance orchestration</h2><span class="tag">TCP 5000 · CEC-enabled display</span></div>
+      <p class="subtle">The ESP32 now coordinates the IFP6570 over native ViewSonic LAN control. Boot audio is fail-safe: the panel must acknowledge upstream mute before the controller will drive the Klipsch to maximum gain.</p>
+      <h3>Display control</h3><div id="viewSonicPower" class="grid two"></div>
+      <h3>System behaviors</h3><div id="systemActions" class="grid two"></div>
+      <div class="info"><strong>Automatic boot:</strong> Dell/Input 1 is selected locally, then after Wi-Fi the controller mutes the ViewSonic, sends 70 Klipsch Volume Up presses, selects Optical, waits for the NEC queue to settle, and unmutes the ViewSonic. If mute cannot be established, the gain ramp is skipped.</div>
+      <div class="info warn"><strong>Shutdown test:</strong> <code>/system/shutdown</code> puts the ViewSonic into standby. With CEC enabled, the display may also send a power-off instruction to the active CEC source.</div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>Response / diagnostics</h2><span class="tag">JSON from ESP32</span></div>
       <div class="grid two">
         <button class="soft" data-diagnostic="/health">Firmware health</button>
         <button class="soft" data-diagnostic="/hdmi/status">HDMI switch status</button>
         <button class="soft" data-diagnostic="/klipsch/status">Klipsch wired NEC status</button>
         <button class="soft" data-diagnostic="/klipsch/commands">Klipsch command catalog</button>
+        <button class="soft" data-diagnostic="/viewsonic/status">ViewSonic LAN status</button>
+        <button class="soft" data-diagnostic="/system/startup/status">Appliance startup status</button>
         <button class="soft" data-diagnostic="/ir/last">IR RX GPIO26</button>
       </div>
       <div class="frameWrap"><iframe title="Live ESP32 JSON response" id="reply" name="espReplyFrame" referrerpolicy="no-referrer" srcdoc="<body style='font:14px system-ui;color:#445; padding:12px;'>Select a test or diagnostic to display its response here.</body>"></iframe></div>
@@ -108,7 +118,7 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
     </div>
   </section>
 </div>
-<div class="footer">Source contract: ShopShell_Hardware_Controller_v2.1 (GPIO25 Klipsch wired NEC; GPIO27/32/33/21 HDMI switch open-drain controls; general RS-232 bridge on port 2323). This standalone tester only issues HTTP requests. All pass/fail results are user-entered observations.</div>
+<div class="footer">Source contract: ShopShell_Hardware_Controller_v2.2 (GPIO25 Klipsch wired NEC; GPIO27/32/33/21 HDMI switch open-drain controls; general RS-232 bridge on port 2323). This standalone tester only issues HTTP requests. All pass/fail results are user-entered observations.</div>
 </main>
 <script>
 (() => {
@@ -118,6 +128,12 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
   {group:'hdmiInputs', key:'hdmi_ps4', name:'PS4', path:'/hdmi/input/2', kind:'hdmi'},
   {group:'hdmiInputs', key:'hdmi_apple', name:'APPLE TV', path:'/hdmi/input/3', kind:'hdmi'},
   {group:'hdmiCycle', key:'hdmi_cycle', name:'CYCLE', path:'/hdmi/cycle', kind:'hdmi'},
+  {group:'viewSonicPower', key:'vs_mute_on', name:'VIEWSONIC MUTE', path:'/viewsonic/mute/on', kind:'viewsonic'},
+  {group:'viewSonicPower', key:'vs_mute_off', name:'VIEWSONIC UNMUTE', path:'/viewsonic/mute/off', kind:'viewsonic'},
+  {group:'viewSonicPower', key:'vs_power_on', name:'VIEWSONIC POWER ON', path:'/viewsonic/power/on', kind:'viewsonic'},
+  {group:'viewSonicPower', key:'vs_standby', name:'VIEWSONIC STANDBY', path:'/viewsonic/standby', kind:'viewsonic', danger:true},
+  {group:'systemActions', key:'sys_audio_boot', name:'RUN AUDIO BOOTSTRAP', path:'/system/audio/bootstrap', kind:'system'},
+  {group:'systemActions', key:'sys_shutdown', name:'SYSTEM SHUTDOWN PREP', path:'/system/shutdown', kind:'system', danger:true},
   {group:'kPower', key:'k_power', name:'POWER TOGGLE', path:'/klipsch/power', kind:'klipsch'},
   {group:'kPower', key:'k_mute', name:'MUTE TOGGLE', path:'/klipsch/mute', kind:'klipsch'},
   {group:'kVolume', key:'k_vol_up', name:'VOLUME +', path:'/klipsch/volume/up', kind:'klipsch', repeatable:true},
@@ -151,7 +167,7 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
  function formPost(url){const form=document.createElement('form');form.method='POST';form.action=url;form.target='espReplyFrame';form.style.display='none';document.body.append(form);form.submit();setTimeout(()=>form.remove(),1500);}
  function navigateResponse(url){$('reply').src=url;}
  function send(path, params={}, label=path, useGet=false){let url;try{url=new URL(path,base());for(const [k,v] of Object.entries(params))url.searchParams.set(k,String(v));}catch(e){alert(e.message);return false;}latestUrl=url.toString();try{if(useGet){latestDiagnosticUrl=latestUrl;navigateResponse(latestUrl);}else formPost(latestUrl);}catch(e){alert('Browser blocked the request: '+e.message);return false;}log(`${useGet?'GET':'POST'} ${label} — ${url.pathname}${url.search} (submitted; verify response and hardware)`);return true;}
- function command(d,internal=false){if(ramping&&!internal){alert('Full-gain batch test is running. Stop it before other commands.');return;}const params={};if(d.repeatable){params.count=Number($('volCount').value);params.repeats=Number($('volRepeats').value);}send(d.path,params,d.name);}
+ function command(d,internal=false){if(ramping&&!internal){alert('Full-gain batch test is running. Stop it before other commands.');return;}if(d.danger&&!confirm(`Run ${d.name}? This can change display power state.`))return;const params={};if(d.repeatable){params.count=Number($('volCount').value);params.repeats=Number($('volRepeats').value);}send(d.path,params,d.name);}
  function create(){for(const d of defs){const wrap=document.createElement('div');wrap.className='command-card';const main=document.createElement('button');main.textContent=d.name;main.className='primary '+(d.danger?'alert':d.key==='k_vol_up'?'positive':'');main.addEventListener('click',()=>command(d));const small=document.createElement('div');small.className='rowmini';const pass=document.createElement('button');pass.className='soft';pass.textContent='✓ Pass';pass.title='Mark this hardware test as passing';pass.addEventListener('click',()=>mark(d.key,'pass'));const fail=document.createElement('button');fail.className='soft';fail.textContent='✕ Fail';fail.title='Mark this hardware test as failing';fail.addEventListener('click',()=>mark(d.key,'fail'));small.append(pass,fail);const last=document.createElement('div');last.className='rowmini';const label=document.createElement('span');label.className='badge-result state '+(data.results[d.key]||'untested');label.dataset.stateFor=d.key;label.textContent=badgeText(data.results[d.key]||'untested');const clear=document.createElement('button');clear.className='soft small';clear.textContent='Reset';clear.title='Clear this command result';clear.addEventListener('click',()=>mark(d.key,'untested'));last.append(label,clear);wrap.append(main,small,last);$(d.group).append(wrap);}}
  function openDiag(path){send(path,{},path,true)}
  document.querySelectorAll('[data-diagnostic]').forEach(btn=>btn.addEventListener('click',()=>openDiag(btn.dataset.diagnostic)));
@@ -165,8 +181,8 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
  $('stopRamp').addEventListener('click',()=>stopRamp(true));
  $('startRamp').addEventListener('click',()=>{if(!$('mutedCheck').checked){alert('Mute upstream audio first.');return;}const goal=Number($('rampTotal').value);if(!confirm(`Send ${goal} Volume Up presses to the Klipsch, in paced batches? Confirm upstream audio is MUTED.`))return;ramping=true;$('startRamp').disabled=true;$('stopRamp').disabled=false;let done=0;const sendNext=()=>{if(!ramping)return;const n=Math.min(10,goal-done);if(!send('/klipsch/volume/up',{count:n,repeats:0},`RAMP UP batch ${done+1}-${done+n}`)){stopRamp(true);return;}done+=n;$('rampText').textContent=`Submitted ${done}/${goal} presses`;if(done<goal){rampTimer=setTimeout(sendNext,3000);}else{rampTimer=setTimeout(()=>{log(`Finished submitting ${goal} volume-up presses; verify amplifier manually`);stopRamp(false);$('rampText').textContent=`Submitted all ${goal} presses`;},3000);}};sendNext();});
  function download(name,content,mime){const b=new Blob([content],{type:mime});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);}
- $('exportJson').addEventListener('click',()=>{persist();download('shopshell_hardware_controller_tests.json',JSON.stringify({exported_at:new Date().toISOString(),firmware:'ShopShell_Hardware_Controller_v2.1',host:$('host').value,commands:defs.map(d=>({label:d.name,path:d.path,result:data.results[d.key]||'untested'})),events:data.events,notes:data.notes},null,2),'application/json');});
- $('exportCsv').addEventListener('click',()=>{const cells=[['Device','Command','Method','Path','Result'],...defs.map(d=>[d.kind==='hdmi'?'HDMI Switch':'Klipsch R-15PM',d.name,'POST',d.path,data.results[d.key]||'untested'])];const csv=cells.map(row=>row.map(x=>'"'+String(x).replaceAll('"','""')+'"').join(',')).join('\r\n');download('shopshell_test_matrix.csv',csv,'text/csv');});
+ $('exportJson').addEventListener('click',()=>{persist();download('shopshell_hardware_controller_tests.json',JSON.stringify({exported_at:new Date().toISOString(),firmware:'ShopShell_Hardware_Controller_v2.2',host:$('host').value,commands:defs.map(d=>({label:d.name,path:d.path,result:data.results[d.key]||'untested'})),events:data.events,notes:data.notes},null,2),'application/json');});
+ $('exportCsv').addEventListener('click',()=>{const cells=[['Device','Command','Method','Path','Result'],...defs.map(d=>[d.kind==='hdmi'?'HDMI Switch':d.kind==='viewsonic'?'ViewSonic IFP6570':d.kind==='system'?'System Orchestration':'Klipsch R-15PM',d.name,'POST',d.path,data.results[d.key]||'untested'])];const csv=cells.map(row=>row.map(x=>'"'+String(x).replaceAll('"','""')+'"').join(',')).join('\r\n');download('shopshell_test_matrix.csv',csv,'text/csv');});
  $('clearLog').addEventListener('click',()=>{if(confirm('Clear all local test results, notes, and activity?')){data.results={};data.events=[];data.notes='';$('notes').value='';persist();document.querySelectorAll('[data-state-for]').forEach(x=>{x.textContent='Not marked';x.className='badge-result state';});drawLog();updateMetrics();}});
  create();drawLog();updateMetrics();
 })();
