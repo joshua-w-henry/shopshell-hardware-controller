@@ -592,7 +592,7 @@ void configureHttpRoutes()
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.3\",";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.4\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
@@ -790,7 +790,7 @@ void setup()
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.3");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.4");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
