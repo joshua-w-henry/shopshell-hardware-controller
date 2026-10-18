@@ -26,21 +26,36 @@ for route in (
     assert f'"{route}"' in MAIN, f"Missing route {route}"
 
 assert "KLIPSCH_BOOT_MAX_STEPS = 70" in MAIN
+assert "KLIPSCH_BOOT_QUEUE_WATERMARK = 20" in MAIN
 assert "viewSonic.setMute(true)" in MAIN
-assert "queueKlipschBootNormalization()" in MAIN
-assert "findKlipschCommand(\"input/optical\")" in MAIN
+assert "queueNextKlipschBootVolumeChunk()" in MAIN
+assert 'findKlipschCommand("input/optical")' in MAIN
+assert "SelectingKlipschOptical" in MAIN
+assert "WaitingForKlipschOptical" in MAIN
 assert "viewSonic.setMute(false)" in MAIN
 assert "MAX_QUEUE = 96" in KLIPSCH
 assert "viewSonic.setStandby()" in MAIN
-assert "ShopShell_Hardware_Controller_v2.2" in MAIN
+assert "ShopShell_Hardware_Controller_v2.3" in MAIN
 
-# Safety invariant: failure to establish upstream mute must fail the boot
-# bootstrap instead of proceeding with the max-volume ramp.
+# Cold-boot safety invariant: the gain ramp cannot begin until deterministic
+# ViewSonic mute has succeeded. A slow ViewSonic must be retried rather than
+# causing a permanent startup failure.
 mute_pos = MAIN.index("if (viewSonic.setMute(true))")
-fail_pos = MAIN.index('failAudioBootstrap("viewsonic_mute_failed")')
-queue_pos = MAIN.index("queueKlipschBootNormalization()")
-assert mute_pos < fail_pos < queue_pos
+queue_pos = MAIN.index("queueNextKlipschBootVolumeChunk()")
+optical_pos = MAIN.index("queueKlipschBootOptical()")
+unmute_pos = MAIN.index("if (viewSonic.setMute(false))")
+assert mute_pos < queue_pos < optical_pos < unmute_pos
+assert "AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS" not in MAIN
+assert 'failAudioBootstrap("viewsonic_mute_failed")' not in MAIN
+assert "ViewSonic not ready (%s); retrying" in MAIN
+assert "ViewSonic unmute not ready (%s); retrying" in MAIN
+
+# Queue-capacity invariant: the 70-step ramp is fed in bounded chunks and
+# Optical is not selected until the volume queue has drained.
+assert "remaining > 10 ? 10" in MAIN
+assert "klipschQueueDepth() >= KLIPSCH_BOOT_QUEUE_WATERMARK" in MAIN
+assert 'audioBootstrapStage = AudioBootstrapStage::SelectingKlipschOptical' in MAIN
 
 print("PASS: ViewSonic + appliance boot/shutdown contract")
-print("  upstream mute -> 70-step Klipsch max -> Optical -> upstream unmute")
+print("  retry ViewSonic until ready -> incremental 70-step Klipsch max -> Optical -> unmute")
 print("  ViewSonic standby exposed for coordinated shutdown")
