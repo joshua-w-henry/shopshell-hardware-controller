@@ -1,6 +1,6 @@
-# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.4
+# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.5
 
-**Firmware ID:** `ShopShell_Hardware_Controller_v2.4`  
+**Firmware ID:** `ShopShell_Hardware_Controller_v2.5`  
 **Target:** ESP32 Dev Module, PlatformIO, Arduino / Espressif32 6.12.0  
 **Network hostname:** `promethean-shop`  
 **Primary role:** local low-level hardware controller for the ShopShell station.
@@ -40,16 +40,17 @@ This runs locally and does not depend on Wi-Fi, ShopShell, Home Assistant, or In
 
 ### Appliance boot audio normalization
 
-After Wi-Fi comes up, v2.4 performs a second, fail-safe hardware initialization sequence:
+v2.5 deliberately **does not change ViewSonic mute state during boot**. ViewSonic mute/unmute was found to interact unpredictably with the Windows audio endpoint/mixer, including leaving the station muted after startup.
 
-1. Begin checking the ViewSonic IFP6570 at `192.168.87.74:5000`.
-2. Retry every 2 seconds until deterministic ViewSonic **Mute ON** succeeds with a valid `401+<CR>` acknowledgement. A slow cold boot is therefore a wait state, not a permanent failure.
-3. Only after mute is confirmed, feed **70 Klipsch Volume Up presses** into the wired NEC queue in bounded chunks. The ramp no longer depends on a particular queue capacity.
-4. Wait for the volume ramp to drain completely.
-5. Queue **Klipsch Optical**, then wait for that command to drain.
-6. Send deterministic ViewSonic **Mute OFF**. If the ViewSonic LAN service temporarily disappears, keep retrying until unmute succeeds.
+The automatic audio initialization is now local to the Klipsch path:
 
-The firmware never runs the maximum-volume ramp unless upstream mute has first been confirmed. If ViewSonic LAN control is unavailable, startup remains safely in the mute-wait stage and self-recovers when TCP/5000 becomes available.
+1. Wait 7 seconds after ESP32 boot.
+2. Feed **70 Klipsch Volume Up presses** into the wired NEC queue in bounded chunks.
+3. Wait for the volume ramp to drain completely.
+4. Queue **Klipsch Optical** and wait for that command to drain.
+5. Mark audio bootstrap complete.
+
+The sequence does not depend on ViewSonic LAN availability or Wi-Fi and does not alter Windows/ViewSonic audio state. Manual ViewSonic mute/unmute routes remain available for diagnostics but are not used automatically.
 
 The boot audio state is exposed by `GET /system/startup/status`, and the sequence can be retriggered manually with `POST /system/audio/bootstrap`.
 
@@ -74,9 +75,8 @@ S31 AC restored
 -> Dell / HDMI switch power up
 -> ESP32 selects Dell / Input 1 locally
 -> active Dell HDMI wakes ViewSonic
--> ViewSonic muted
 -> Klipsch gain normalized to MAX, Optical selected
--> ViewSonic unmuted
+-> ViewSonic / Windows mute state remains untouched
 -> Windows launches ShopShell
 
 SHUTDOWN
@@ -113,7 +113,7 @@ The old AP5 UART/MAX3232 hardware is retained as a general serial interface:
 | Raw TCP bridge | port 2323 |
 | USB serial passthrough | ESP32 USB serial ↔ UART2 |
 
-No AP5-specific serial command is sent automatically in v2.4.
+No AP5-specific serial command is sent automatically in v2.5.
 
 ### Optional optical IR diagnostic
 
@@ -192,7 +192,7 @@ Named command routes:
 3. Build and upload.
 4. Open Serial Monitor at 115,200 baud.
 5. Confirm startup messages show the HDMI GPIO map, Klipsch RMT ready, and two Dell/Input-1 source selections.
-6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.4`.
+6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.5`.
 7. Use the standalone commissioning console in `tools/` to test each HDMI input and the existing Klipsch controls.
 
 ## Commissioning cautions
@@ -200,13 +200,13 @@ Named command routes:
 - HDMI GPIOs are **open-drain only**. Do not change them to ordinary push-pull outputs that drive 3.3 V HIGH into the switch.
 - The HDMI switch common/remote pin 5 is directly tied to ESP32 ground in the installed wiring.
 - `/hdmi/status` cannot know the physical selected source; it reports only the last command issued by the ESP32.
-- Klipsch power is a toggle and amplifier volume has no readback. The automatic max-gain sequence therefore assumes the Klipsch is already powered/available; it deliberately uses deterministic ViewSonic mute rather than the Klipsch mute toggle.
-- Do not remove the ViewSonic-mute prerequisite from the automatic gain ramp. Failure to establish upstream mute must remain fail-safe.
+- Klipsch power is a toggle and amplifier volume has no readback. The automatic max-gain sequence therefore assumes the Klipsch is already powered/available.
+- Automatic boot intentionally does not issue ViewSonic mute/unmute commands because they were observed to interact with the Windows audio mixer state.
 - HTTP and TCP 2323 are unauthenticated LAN services. Do not expose them directly to an untrusted network or the Internet.
 
 ## Verification
 
-`tests/test_nec_waveform.py` continues to validate the Klipsch NEC field encoding and timing assumptions. Hardware acceptance for v2.4 is:
+`tests/test_nec_waveform.py` continues to validate the Klipsch NEC field encoding and timing assumptions. Hardware acceptance for v2.5 is:
 
 - Input 1 selects Dell / ShopShell.
 - Input 2 selects PS4.
@@ -216,13 +216,11 @@ Named command routes:
 - Existing Klipsch wired controls remain functional.
 - General RS-232 TCP bridge still listens on port 2323.
 
-### v2.4 additional acceptance
+### v2.5 additional acceptance
 
-- ViewSonic Mute ON returns a valid acknowledgement over TCP 5000.
-- Automatic boot reaches `audio_stage=complete` with no audio blast during the max-gain ramp.
+- Automatic boot reaches `audio_stage=complete`.
 - Klipsch finishes at maximum internal gain and Optical input.
-- ViewSonic is unmuted after the Klipsch queue settles.
-- If the ViewSonic LAN/control service is not ready during cold boot, the controller keeps retrying without running the Klipsch ramp unmuted.
+- Automatic boot does not issue ViewSonic mute or unmute commands.
 - The 70-step Klipsch ramp is fed incrementally and does not rely on the NEC queue being large enough to hold the entire sequence at once.
 - `POST /system/shutdown` places the ViewSonic into standby.
 - ShopShell OFF continues Windows shutdown even if ViewSonic standby fails.
