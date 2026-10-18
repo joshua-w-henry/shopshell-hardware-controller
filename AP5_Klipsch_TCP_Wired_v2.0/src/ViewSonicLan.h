@@ -18,7 +18,9 @@ public:
     uint32_t lastAttemptMs() const { return _lastAttemptMs; }
 
 private:
-    bool sendSetCommand(const char *command);
+    bool sendSetCommand(
+        const char *command,
+        bool acceptSuccessfulWriteWithoutReply = false);
 
     IPAddress _address;
     uint16_t _port;
