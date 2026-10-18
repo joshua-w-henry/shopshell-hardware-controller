@@ -40,10 +40,10 @@ static constexpr uint32_t STARTUP_HDMI_REASSERT_DELAY_MS = 2500;
 // 4) unmute the ViewSonic only after the wired NEC queue has drained.
 // If the ViewSonic cannot be muted, the gain ramp is NOT attempted.
 static constexpr uint16_t KLIPSCH_BOOT_MAX_STEPS = 70;
+static constexpr uint8_t KLIPSCH_BOOT_QUEUE_WATERMARK = 20;
 static constexpr uint32_t AUDIO_BOOT_NOT_BEFORE_MS = 7000;
-static constexpr uint32_t AUDIO_BOOT_RETRY_MS = 1500;
+static constexpr uint32_t AUDIO_BOOT_RETRY_MS = 2000;
 static constexpr uint32_t AUDIO_BOOT_SETTLE_MS = 500;
-static constexpr uint8_t AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS = 3;
 
 HardwareSerial SerialBridge(2);
 WiFiServer tcpServer(TCP_PORT);
@@ -313,6 +313,8 @@ enum class AudioBootstrapStage
     WaitingForKlipschIdle,
     QueueingKlipschNormalization,
     WaitingForKlipschNormalization,
+    SelectingKlipschOptical,
+    WaitingForKlipschOptical,
     SettlingBeforeUnmute,
     UnmutingViewSonic,
     Complete,
@@ -321,7 +323,8 @@ enum class AudioBootstrapStage
 
 AudioBootstrapStage audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
 uint32_t audioBootstrapDeadlineMs = 0;
-uint8_t audioBootstrapViewSonicAttempts = 0;
+uint32_t audioBootstrapViewSonicAttempts = 0;
+uint16_t audioBootstrapKlipschStepsQueued = 0;
 String audioBootstrapError = "none";
 
 const char *audioBootstrapStageName()
@@ -333,6 +336,8 @@ const char *audioBootstrapStageName()
         case AudioBootstrapStage::WaitingForKlipschIdle: return "waiting_for_klipsch_idle";
         case AudioBootstrapStage::QueueingKlipschNormalization: return "queueing_klipsch_normalization";
         case AudioBootstrapStage::WaitingForKlipschNormalization: return "waiting_for_klipsch_normalization";
+        case AudioBootstrapStage::SelectingKlipschOptical: return "selecting_klipsch_optical";
+        case AudioBootstrapStage::WaitingForKlipschOptical: return "waiting_for_klipsch_optical";
         case AudioBootstrapStage::SettlingBeforeUnmute: return "settling_before_unmute";
         case AudioBootstrapStage::UnmutingViewSonic: return "unmuting_viewsonic";
         case AudioBootstrapStage::Complete: return "complete";
@@ -352,6 +357,7 @@ void beginAudioBootstrap(bool immediate = false)
     audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
     audioBootstrapDeadlineMs = millis() + (immediate ? 0 : AUDIO_BOOT_NOT_BEFORE_MS);
     audioBootstrapViewSonicAttempts = 0;
+    audioBootstrapKlipschStepsQueued = 0;
     audioBootstrapError = "none";
 }
 
@@ -362,23 +368,42 @@ void failAudioBootstrap(const char *reason)
     Serial.printf("Audio bootstrap FAILED SAFE: %s\n", reason);
 }
 
-bool queueKlipschBootNormalization()
+bool queueNextKlipschBootVolumeChunk()
 {
     const KlipschCommand *volumeUp = findKlipschCommand("volume/up");
-    const KlipschCommand *optical = findKlipschCommand("input/optical");
-    if (!volumeUp || !optical)
+    if (!volumeUp || !klipschTxReady())
         return false;
 
-    uint16_t remaining = KLIPSCH_BOOT_MAX_STEPS;
-    while (remaining)
-    {
-        const uint8_t chunk = remaining > 10 ? 10 : static_cast<uint8_t>(remaining);
-        if (!queueKlipschWired(volumeUp->command, chunk, 0))
-            return false;
-        remaining -= chunk;
-    }
+    if (audioBootstrapKlipschStepsQueued >= KLIPSCH_BOOT_MAX_STEPS)
+        return true;
 
-    return queueKlipschWired(optical->command, 1, 0);
+    // Feed the existing NEC queue incrementally instead of assuming a specific
+    // queue capacity. This keeps the bootstrap nonblocking and leaves headroom
+    // for the transmitter state machine while the 70-step ramp is in progress.
+    if (klipschQueueDepth() >= KLIPSCH_BOOT_QUEUE_WATERMARK)
+        return true;
+
+    const uint16_t remaining =
+        KLIPSCH_BOOT_MAX_STEPS - audioBootstrapKlipschStepsQueued;
+    const uint8_t chunk =
+        remaining > 10 ? 10 : static_cast<uint8_t>(remaining);
+
+    if (!queueKlipschWired(volumeUp->command, chunk, 0))
+        return true; // Queue may be temporarily busy; retry on the next loop.
+
+    audioBootstrapKlipschStepsQueued += chunk;
+    Serial.printf("Audio bootstrap: queued %u/%u Volume Up presses\n",
+                  audioBootstrapKlipschStepsQueued,
+                  KLIPSCH_BOOT_MAX_STEPS);
+    return true;
+}
+
+bool queueKlipschBootOptical()
+{
+    const KlipschCommand *optical = findKlipschCommand("input/optical");
+    return optical &&
+           klipschTxReady() &&
+           queueKlipschWired(optical->command, 1, 0);
 }
 
 void processAudioBootstrap()
@@ -409,12 +434,11 @@ void processAudioBootstrap()
                 return;
             }
 
-            if (audioBootstrapViewSonicAttempts >= AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS)
-            {
-                failAudioBootstrap("viewsonic_mute_failed");
-                return;
-            }
-
+            // A cold-booted ViewSonic can take substantially longer than the
+            // ESP32 to expose TCP/5000. Keep retrying safely until LAN control
+            // becomes available; do not run the Klipsch gain ramp unmuted.
+            Serial.printf("Audio bootstrap: ViewSonic not ready (%s); retrying\n",
+                          viewSonic.lastReply().c_str());
             audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
             return;
 
@@ -425,19 +449,47 @@ void processAudioBootstrap()
             break;
 
         case AudioBootstrapStage::QueueingKlipschNormalization:
-            Serial.printf("Audio bootstrap: queueing %u Volume Up presses + Optical\n",
-                          KLIPSCH_BOOT_MAX_STEPS);
-            if (!queueKlipschBootNormalization())
+            if (!klipschTxReady() ||
+                findKlipschCommand("volume/up") == nullptr)
             {
-                // Leave ViewSonic muted if the gain normalization cannot be
-                // completed. This is intentionally fail-safe.
-                failAudioBootstrap("klipsch_normalization_queue_failed");
+                failAudioBootstrap("klipsch_volume_command_unavailable");
                 return;
             }
-            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschNormalization;
+
+            if (!queueNextKlipschBootVolumeChunk())
+            {
+                failAudioBootstrap("klipsch_volume_queue_unavailable");
+                return;
+            }
+
+            if (audioBootstrapKlipschStepsQueued >= KLIPSCH_BOOT_MAX_STEPS)
+                audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschNormalization;
             return;
 
         case AudioBootstrapStage::WaitingForKlipschNormalization:
+            if (klipschQueueDepth() != 0)
+                return;
+            Serial.println("Audio bootstrap: Klipsch max-volume ramp complete");
+            audioBootstrapStage = AudioBootstrapStage::SelectingKlipschOptical;
+            break;
+
+        case AudioBootstrapStage::SelectingKlipschOptical:
+            if (!queueKlipschBootOptical())
+            {
+                // If another command briefly occupies the queue, simply retry.
+                // A missing transmitter/command was already checked above.
+                if (!klipschTxReady() ||
+                    findKlipschCommand("input/optical") == nullptr)
+                {
+                    failAudioBootstrap("klipsch_optical_command_unavailable");
+                }
+                return;
+            }
+            Serial.println("Audio bootstrap: Klipsch Optical queued");
+            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschOptical;
+            return;
+
+        case AudioBootstrapStage::WaitingForKlipschOptical:
             if (klipschQueueDepth() != 0)
                 return;
             audioBootstrapDeadlineMs = now + AUDIO_BOOT_SETTLE_MS;
@@ -467,13 +519,11 @@ void processAudioBootstrap()
                 return;
             }
 
-            if (audioBootstrapViewSonicAttempts >= AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS)
-            {
-                // Safer failure mode is to remain muted.
-                failAudioBootstrap("viewsonic_unmute_failed");
-                return;
-            }
-
+            // Keep retrying until the ViewSonic accepts the deterministic
+            // unmute. Remaining muted is safe, but it should self-recover when
+            // the display's LAN control becomes available again.
+            Serial.printf("Audio bootstrap: ViewSonic unmute not ready (%s); retrying\n",
+                          viewSonic.lastReply().c_str());
             audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
             return;
 
@@ -542,7 +592,7 @@ void configureHttpRoutes()
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.2\",";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.3\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
@@ -740,7 +790,7 @@ void setup()
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.2");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.3");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
