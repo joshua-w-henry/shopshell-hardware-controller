@@ -12,8 +12,13 @@ ViewSonicLanControl::ViewSonicLanControl(
 
 bool ViewSonicLanControl::setStandby()
 {
-    // IFP70 Set Power: s ! 000 = standby
-    return sendSetCommand("801s!000\r");
+    // IFP70 Set Power: s ! 000 = standby.
+    //
+    // On the IFP6570, accepting standby starts the Android shutdown countdown
+    // and the LAN-control service may disappear before it returns 401+<CR>.
+    // A successful TCP connection plus a complete command write is therefore
+    // sufficient for standby only. Explicit negative replies still fail.
+    return sendSetCommand("801s!000\r", true);
 }
 
 bool ViewSonicLanControl::setPowerOn()
@@ -28,7 +33,9 @@ bool ViewSonicLanControl::setMute(bool muted)
     return sendSetCommand(muted ? "801s6001\r" : "801s6000\r");
 }
 
-bool ViewSonicLanControl::sendSetCommand(const char *command)
+bool ViewSonicLanControl::sendSetCommand(
+    const char *command,
+    bool acceptSuccessfulWriteWithoutReply)
 {
     _lastAttemptMs = millis();
     _lastCommand = command;
@@ -49,8 +56,16 @@ bool ViewSonicLanControl::sendSetCommand(const char *command)
         return false;
     }
 
-    client.print(command);
+    const size_t commandLength = strlen(command);
+    const size_t written = client.print(command);
     client.flush();
+
+    if (written != commandLength)
+    {
+        client.stop();
+        _lastReply = "write_failed";
+        return false;
+    }
 
     const uint32_t started = millis();
     String reply;
@@ -74,6 +89,14 @@ bool ViewSonicLanControl::sendSetCommand(const char *command)
     }
 
     client.stop();
+
+    if (acceptSuccessfulWriteWithoutReply && reply.isEmpty())
+    {
+        _lastReply = "sent_no_ack";
+        _lastOk = true;
+        return true;
+    }
+
     _lastReply = reply.isEmpty() ? "timeout" : reply;
     _lastReply.replace("\r", "<CR>");
     return false;
