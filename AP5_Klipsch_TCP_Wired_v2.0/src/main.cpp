@@ -7,6 +7,7 @@
 
 #include "secrets.h"
 #include "KlipschWired.h"
+#include "ViewSonicLan.h"
 
 static constexpr char HOSTNAME[] = "promethean-shop";
 static constexpr uint16_t TCP_PORT = 2323;
@@ -32,10 +33,23 @@ static constexpr uint16_t HDMI_PRESS_MS = 160;
 static constexpr uint32_t STARTUP_HDMI_DELAY_MS = 3000;
 static constexpr uint32_t STARTUP_HDMI_REASSERT_DELAY_MS = 2500;
 
+// Appliance boot audio policy:
+// 1) deterministically mute the ViewSonic upstream audio,
+// 2) saturate the Klipsch internal gain at maximum,
+// 3) select Optical,
+// 4) unmute the ViewSonic only after the wired NEC queue has drained.
+// If the ViewSonic cannot be muted, the gain ramp is NOT attempted.
+static constexpr uint16_t KLIPSCH_BOOT_MAX_STEPS = 70;
+static constexpr uint32_t AUDIO_BOOT_NOT_BEFORE_MS = 7000;
+static constexpr uint32_t AUDIO_BOOT_RETRY_MS = 1500;
+static constexpr uint32_t AUDIO_BOOT_SETTLE_MS = 500;
+static constexpr uint8_t AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS = 3;
+
 HardwareSerial SerialBridge(2);
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
 WebServer httpServer(HTTP_PORT);
+ViewSonicLanControl viewSonic(IPAddress(192, 168, 87, 74));
 
 // Optional optical IR receive diagnostic, independent of wired GPIO25 output.
 IRrecv irReceiver(IR_RX_PIN);
@@ -290,6 +304,183 @@ void handleKlipschRequest()
     httpServer.send(200, "application/json", json);
 }
 
+enum class AudioBootstrapStage
+{
+    WaitingForNetwork,
+    MutingViewSonic,
+    WaitingForKlipschIdle,
+    QueueingKlipschNormalization,
+    WaitingForKlipschNormalization,
+    SettlingBeforeUnmute,
+    UnmutingViewSonic,
+    Complete,
+    Failed
+};
+
+AudioBootstrapStage audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
+uint32_t audioBootstrapDeadlineMs = 0;
+uint8_t audioBootstrapViewSonicAttempts = 0;
+String audioBootstrapError = "none";
+
+const char *audioBootstrapStageName()
+{
+    switch (audioBootstrapStage)
+    {
+        case AudioBootstrapStage::WaitingForNetwork: return "waiting_for_network";
+        case AudioBootstrapStage::MutingViewSonic: return "muting_viewsonic";
+        case AudioBootstrapStage::WaitingForKlipschIdle: return "waiting_for_klipsch_idle";
+        case AudioBootstrapStage::QueueingKlipschNormalization: return "queueing_klipsch_normalization";
+        case AudioBootstrapStage::WaitingForKlipschNormalization: return "waiting_for_klipsch_normalization";
+        case AudioBootstrapStage::SettlingBeforeUnmute: return "settling_before_unmute";
+        case AudioBootstrapStage::UnmutingViewSonic: return "unmuting_viewsonic";
+        case AudioBootstrapStage::Complete: return "complete";
+        case AudioBootstrapStage::Failed: return "failed";
+    }
+    return "unknown";
+}
+
+bool audioBootstrapInProgress()
+{
+    return audioBootstrapStage != AudioBootstrapStage::Complete &&
+           audioBootstrapStage != AudioBootstrapStage::Failed;
+}
+
+void beginAudioBootstrap(bool immediate = false)
+{
+    audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
+    audioBootstrapDeadlineMs = millis() + (immediate ? 0 : AUDIO_BOOT_NOT_BEFORE_MS);
+    audioBootstrapViewSonicAttempts = 0;
+    audioBootstrapError = "none";
+}
+
+void failAudioBootstrap(const char *reason)
+{
+    audioBootstrapError = reason;
+    audioBootstrapStage = AudioBootstrapStage::Failed;
+    Serial.printf("Audio bootstrap FAILED SAFE: %s\n", reason);
+}
+
+bool queueKlipschBootNormalization()
+{
+    const KlipschCommand *volumeUp = findKlipschCommand("volume/up");
+    const KlipschCommand *optical = findKlipschCommand("input/optical");
+    if (!volumeUp || !optical)
+        return false;
+
+    uint16_t remaining = KLIPSCH_BOOT_MAX_STEPS;
+    while (remaining)
+    {
+        const uint8_t chunk = remaining > 10 ? 10 : static_cast<uint8_t>(remaining);
+        if (!queueKlipschWired(volumeUp->command, chunk, 0))
+            return false;
+        remaining -= chunk;
+    }
+
+    return queueKlipschWired(optical->command, 1, 0);
+}
+
+void processAudioBootstrap()
+{
+    const uint32_t now = millis();
+
+    switch (audioBootstrapStage)
+    {
+        case AudioBootstrapStage::WaitingForNetwork:
+            if (!networkServicesStarted || !deadlineReached(audioBootstrapDeadlineMs))
+                return;
+            audioBootstrapStage = AudioBootstrapStage::MutingViewSonic;
+            audioBootstrapViewSonicAttempts = 0;
+            break;
+
+        case AudioBootstrapStage::MutingViewSonic:
+            if (!deadlineReached(audioBootstrapDeadlineMs))
+                return;
+
+            ++audioBootstrapViewSonicAttempts;
+            Serial.printf("Audio bootstrap: muting ViewSonic (attempt %u)\n",
+                          audioBootstrapViewSonicAttempts);
+
+            if (viewSonic.setMute(true))
+            {
+                Serial.println("Audio bootstrap: ViewSonic muted");
+                audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschIdle;
+                return;
+            }
+
+            if (audioBootstrapViewSonicAttempts >= AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS)
+            {
+                failAudioBootstrap("viewsonic_mute_failed");
+                return;
+            }
+
+            audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
+            return;
+
+        case AudioBootstrapStage::WaitingForKlipschIdle:
+            if (klipschQueueDepth() != 0)
+                return;
+            audioBootstrapStage = AudioBootstrapStage::QueueingKlipschNormalization;
+            break;
+
+        case AudioBootstrapStage::QueueingKlipschNormalization:
+            Serial.printf("Audio bootstrap: queueing %u Volume Up presses + Optical\n",
+                          KLIPSCH_BOOT_MAX_STEPS);
+            if (!queueKlipschBootNormalization())
+            {
+                // Leave ViewSonic muted if the gain normalization cannot be
+                // completed. This is intentionally fail-safe.
+                failAudioBootstrap("klipsch_normalization_queue_failed");
+                return;
+            }
+            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschNormalization;
+            return;
+
+        case AudioBootstrapStage::WaitingForKlipschNormalization:
+            if (klipschQueueDepth() != 0)
+                return;
+            audioBootstrapDeadlineMs = now + AUDIO_BOOT_SETTLE_MS;
+            audioBootstrapStage = AudioBootstrapStage::SettlingBeforeUnmute;
+            return;
+
+        case AudioBootstrapStage::SettlingBeforeUnmute:
+            if (!deadlineReached(audioBootstrapDeadlineMs))
+                return;
+            audioBootstrapViewSonicAttempts = 0;
+            audioBootstrapStage = AudioBootstrapStage::UnmutingViewSonic;
+            break;
+
+        case AudioBootstrapStage::UnmutingViewSonic:
+            if (!deadlineReached(audioBootstrapDeadlineMs))
+                return;
+
+            ++audioBootstrapViewSonicAttempts;
+            Serial.printf("Audio bootstrap: unmuting ViewSonic (attempt %u)\n",
+                          audioBootstrapViewSonicAttempts);
+
+            if (viewSonic.setMute(false))
+            {
+                audioBootstrapStage = AudioBootstrapStage::Complete;
+                audioBootstrapError = "none";
+                Serial.println("Audio bootstrap complete: Klipsch max + Optical, ViewSonic unmuted");
+                return;
+            }
+
+            if (audioBootstrapViewSonicAttempts >= AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS)
+            {
+                // Safer failure mode is to remain muted.
+                failAudioBootstrap("viewsonic_unmute_failed");
+                return;
+            }
+
+            audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
+            return;
+
+        case AudioBootstrapStage::Complete:
+        case AudioBootstrapStage::Failed:
+            return;
+    }
+}
+
 enum class StartupStage
 {
     WaitForHdmiSwitch,
@@ -349,7 +540,8 @@ void configureHttpRoutes()
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.1\"";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.2\",";
+        json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
     });
@@ -378,6 +570,73 @@ void configureHttpRoutes()
     httpServer.on("/hdmi/input/3", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/input/3"); });
     httpServer.on("/hdmi/apple-tv", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/apple-tv"); });
     httpServer.on("/hdmi/cycle", HTTP_POST, []() { cycleHdmiInput(); sendJsonOk("hdmi/cycle"); });
+
+    httpServer.on("/viewsonic/status", HTTP_GET, []()
+    {
+        String json = "{\"ok\":true,";
+        json += "\"address\":\"192.168.87.74:5000\",";
+        json += "\"last_ok\":" + String(viewSonic.lastOk() ? "true" : "false") + ",";
+        json += "\"last_command\":\"" + viewSonic.lastCommand() + "\",";
+        json += "\"last_reply\":\"" + viewSonic.lastReply() + "\",";
+        json += "\"last_attempt_ms\":" + String(viewSonic.lastAttemptMs()) + "}";
+        httpServer.send(200, "application/json", json);
+    });
+
+    httpServer.on("/viewsonic/mute/on", HTTP_POST, []()
+    {
+        if (viewSonic.setMute(true)) sendJsonOk("viewsonic/mute/on");
+        else jsonError(502, "ViewSonic mute command failed");
+    });
+
+    httpServer.on("/viewsonic/mute/off", HTTP_POST, []()
+    {
+        if (viewSonic.setMute(false)) sendJsonOk("viewsonic/mute/off");
+        else jsonError(502, "ViewSonic unmute command failed");
+    });
+
+    httpServer.on("/viewsonic/power/on", HTTP_POST, []()
+    {
+        if (viewSonic.setPowerOn()) sendJsonOk("viewsonic/power/on");
+        else jsonError(502, "ViewSonic power-on command failed");
+    });
+
+    httpServer.on("/viewsonic/standby", HTTP_POST, []()
+    {
+        if (viewSonic.setStandby()) sendJsonOk("viewsonic/standby");
+        else jsonError(502, "ViewSonic standby command failed");
+    });
+
+    httpServer.on("/system/audio/bootstrap", HTTP_POST, []()
+    {
+        if (audioBootstrapInProgress())
+        {
+            jsonError(409, "Audio bootstrap already in progress");
+            return;
+        }
+        beginAudioBootstrap(true);
+        sendJsonOk("system/audio/bootstrap");
+    });
+
+    httpServer.on("/system/startup/status", HTTP_GET, []()
+    {
+        String json = "{\"ok\":true,";
+        json += "\"audio_stage\":\"" + String(audioBootstrapStageName()) + "\",";
+        json += "\"audio_error\":\"" + audioBootstrapError + "\",";
+        json += "\"klipsch_queue_depth\":" + String(klipschQueueDepth()) + ",";
+        json += "\"viewsonic_last_ok\":" + String(viewSonic.lastOk() ? "true" : "false") + ",";
+        json += "\"viewsonic_last_command\":\"" + viewSonic.lastCommand() + "\",";
+        json += "\"viewsonic_last_reply\":\"" + viewSonic.lastReply() + "\"}";
+        httpServer.send(200, "application/json", json);
+    });
+
+    httpServer.on("/system/shutdown", HTTP_POST, []()
+    {
+        // CEC "display off -> player off" is enabled on the ViewSonic. Putting
+        // the panel into standby therefore gives attached CEC-capable sources
+        // a clean appliance-style shutdown signal before station AC is removed.
+        if (viewSonic.setStandby()) sendJsonOk("system/shutdown");
+        else jsonError(502, "ViewSonic standby command failed");
+    });
 
     httpServer.on("/ir/last", HTTP_GET, []()
     {
@@ -479,10 +738,11 @@ void setup()
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI switch + Klipsch R-15PM wired NEC v2.1");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.2");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
+    beginAudioBootstrap();
 
     configureHttpRoutes();
     beginWiFi();
@@ -494,6 +754,7 @@ void loop()
     processStartupSequence();
 
     processNetworkState();
+    processAudioBootstrap();
 
     if (networkServicesStarted)
         httpServer.handleClient();
