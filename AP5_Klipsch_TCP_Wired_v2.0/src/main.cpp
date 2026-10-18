@@ -34,16 +34,15 @@ static constexpr uint32_t STARTUP_HDMI_DELAY_MS = 3000;
 static constexpr uint32_t STARTUP_HDMI_REASSERT_DELAY_MS = 2500;
 
 // Appliance boot audio policy:
-// 1) deterministically mute the ViewSonic upstream audio,
+// 1) leave ViewSonic / Windows mute state completely untouched,
 // 2) saturate the Klipsch internal gain at maximum,
-// 3) select Optical,
-// 4) unmute the ViewSonic only after the wired NEC queue has drained.
-// If the ViewSonic cannot be muted, the gain ramp is NOT attempted.
+// 3) select Optical after the gain ramp has drained.
+//
+// ViewSonic mute/unmute is intentionally excluded from automatic boot because
+// it can interact with the Windows audio endpoint/mixer state.
 static constexpr uint16_t KLIPSCH_BOOT_MAX_STEPS = 70;
 static constexpr uint8_t KLIPSCH_BOOT_QUEUE_WATERMARK = 20;
 static constexpr uint32_t AUDIO_BOOT_NOT_BEFORE_MS = 7000;
-static constexpr uint32_t AUDIO_BOOT_RETRY_MS = 2000;
-static constexpr uint32_t AUDIO_BOOT_SETTLE_MS = 500;
 
 HardwareSerial SerialBridge(2);
 WiFiServer tcpServer(TCP_PORT);
@@ -308,22 +307,18 @@ bool deadlineReached(uint32_t deadline);
 
 enum class AudioBootstrapStage
 {
-    WaitingForNetwork,
-    MutingViewSonic,
+    WaitingForStartDelay,
     WaitingForKlipschIdle,
     QueueingKlipschNormalization,
     WaitingForKlipschNormalization,
     SelectingKlipschOptical,
     WaitingForKlipschOptical,
-    SettlingBeforeUnmute,
-    UnmutingViewSonic,
     Complete,
     Failed
 };
 
-AudioBootstrapStage audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
+AudioBootstrapStage audioBootstrapStage = AudioBootstrapStage::WaitingForStartDelay;
 uint32_t audioBootstrapDeadlineMs = 0;
-uint32_t audioBootstrapViewSonicAttempts = 0;
 uint16_t audioBootstrapKlipschStepsQueued = 0;
 String audioBootstrapError = "none";
 
@@ -331,15 +326,12 @@ const char *audioBootstrapStageName()
 {
     switch (audioBootstrapStage)
     {
-        case AudioBootstrapStage::WaitingForNetwork: return "waiting_for_network";
-        case AudioBootstrapStage::MutingViewSonic: return "muting_viewsonic";
+        case AudioBootstrapStage::WaitingForStartDelay: return "waiting_for_start_delay";
         case AudioBootstrapStage::WaitingForKlipschIdle: return "waiting_for_klipsch_idle";
         case AudioBootstrapStage::QueueingKlipschNormalization: return "queueing_klipsch_normalization";
         case AudioBootstrapStage::WaitingForKlipschNormalization: return "waiting_for_klipsch_normalization";
         case AudioBootstrapStage::SelectingKlipschOptical: return "selecting_klipsch_optical";
         case AudioBootstrapStage::WaitingForKlipschOptical: return "waiting_for_klipsch_optical";
-        case AudioBootstrapStage::SettlingBeforeUnmute: return "settling_before_unmute";
-        case AudioBootstrapStage::UnmutingViewSonic: return "unmuting_viewsonic";
         case AudioBootstrapStage::Complete: return "complete";
         case AudioBootstrapStage::Failed: return "failed";
     }
@@ -354,9 +346,8 @@ bool audioBootstrapInProgress()
 
 void beginAudioBootstrap(bool immediate = false)
 {
-    audioBootstrapStage = AudioBootstrapStage::WaitingForNetwork;
+    audioBootstrapStage = AudioBootstrapStage::WaitingForStartDelay;
     audioBootstrapDeadlineMs = millis() + (immediate ? 0 : AUDIO_BOOT_NOT_BEFORE_MS);
-    audioBootstrapViewSonicAttempts = 0;
     audioBootstrapKlipschStepsQueued = 0;
     audioBootstrapError = "none";
 }
@@ -408,39 +399,13 @@ bool queueKlipschBootOptical()
 
 void processAudioBootstrap()
 {
-    const uint32_t now = millis();
-
     switch (audioBootstrapStage)
     {
-        case AudioBootstrapStage::WaitingForNetwork:
-            if (!networkServicesStarted || !deadlineReached(audioBootstrapDeadlineMs))
-                return;
-            audioBootstrapStage = AudioBootstrapStage::MutingViewSonic;
-            audioBootstrapViewSonicAttempts = 0;
-            break;
-
-        case AudioBootstrapStage::MutingViewSonic:
+        case AudioBootstrapStage::WaitingForStartDelay:
             if (!deadlineReached(audioBootstrapDeadlineMs))
                 return;
-
-            ++audioBootstrapViewSonicAttempts;
-            Serial.printf("Audio bootstrap: muting ViewSonic (attempt %u)\n",
-                          audioBootstrapViewSonicAttempts);
-
-            if (viewSonic.setMute(true))
-            {
-                Serial.println("Audio bootstrap: ViewSonic muted");
-                audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschIdle;
-                return;
-            }
-
-            // A cold-booted ViewSonic can take substantially longer than the
-            // ESP32 to expose TCP/5000. Keep retrying safely until LAN control
-            // becomes available; do not run the Klipsch gain ramp unmuted.
-            Serial.printf("Audio bootstrap: ViewSonic not ready (%s); retrying\n",
-                          viewSonic.lastReply().c_str());
-            audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
-            return;
+            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschIdle;
+            break;
 
         case AudioBootstrapStage::WaitingForKlipschIdle:
             if (klipschQueueDepth() != 0)
@@ -476,8 +441,6 @@ void processAudioBootstrap()
         case AudioBootstrapStage::SelectingKlipschOptical:
             if (!queueKlipschBootOptical())
             {
-                // If another command briefly occupies the queue, simply retry.
-                // A missing transmitter/command was already checked above.
                 if (!klipschTxReady() ||
                     findKlipschCommand("input/optical") == nullptr)
                 {
@@ -492,39 +455,9 @@ void processAudioBootstrap()
         case AudioBootstrapStage::WaitingForKlipschOptical:
             if (klipschQueueDepth() != 0)
                 return;
-            audioBootstrapDeadlineMs = now + AUDIO_BOOT_SETTLE_MS;
-            audioBootstrapStage = AudioBootstrapStage::SettlingBeforeUnmute;
-            return;
-
-        case AudioBootstrapStage::SettlingBeforeUnmute:
-            if (!deadlineReached(audioBootstrapDeadlineMs))
-                return;
-            audioBootstrapViewSonicAttempts = 0;
-            audioBootstrapStage = AudioBootstrapStage::UnmutingViewSonic;
-            break;
-
-        case AudioBootstrapStage::UnmutingViewSonic:
-            if (!deadlineReached(audioBootstrapDeadlineMs))
-                return;
-
-            ++audioBootstrapViewSonicAttempts;
-            Serial.printf("Audio bootstrap: unmuting ViewSonic (attempt %u)\n",
-                          audioBootstrapViewSonicAttempts);
-
-            if (viewSonic.setMute(false))
-            {
-                audioBootstrapStage = AudioBootstrapStage::Complete;
-                audioBootstrapError = "none";
-                Serial.println("Audio bootstrap complete: Klipsch max + Optical, ViewSonic unmuted");
-                return;
-            }
-
-            // Keep retrying until the ViewSonic accepts the deterministic
-            // unmute. Remaining muted is safe, but it should self-recover when
-            // the display's LAN control becomes available again.
-            Serial.printf("Audio bootstrap: ViewSonic unmute not ready (%s); retrying\n",
-                          viewSonic.lastReply().c_str());
-            audioBootstrapDeadlineMs = now + AUDIO_BOOT_RETRY_MS;
+            audioBootstrapStage = AudioBootstrapStage::Complete;
+            audioBootstrapError = "none";
+            Serial.println("Audio bootstrap complete: Klipsch max + Optical; ViewSonic audio state untouched");
             return;
 
         case AudioBootstrapStage::Complete:
@@ -592,7 +525,7 @@ void configureHttpRoutes()
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.4\",";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.5\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
@@ -790,7 +723,7 @@ void setup()
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.4");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.5");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
