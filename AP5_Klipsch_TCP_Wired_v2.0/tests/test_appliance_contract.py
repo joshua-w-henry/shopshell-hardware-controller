@@ -27,30 +27,29 @@ for route in (
 
 assert "KLIPSCH_BOOT_MAX_STEPS = 70" in MAIN
 assert "KLIPSCH_BOOT_QUEUE_WATERMARK = 20" in MAIN
-assert "viewSonic.setMute(true)" in MAIN
 assert "queueNextKlipschBootVolumeChunk()" in MAIN
 assert 'findKlipschCommand("input/optical")' in MAIN
 assert "SelectingKlipschOptical" in MAIN
 assert "WaitingForKlipschOptical" in MAIN
-assert "viewSonic.setMute(false)" in MAIN
 assert "MAX_QUEUE = 96" in KLIPSCH
 assert "viewSonic.setStandby()" in MAIN
 assert "acceptSuccessfulWriteWithoutReply" in VIEWSONIC
 assert '"sent_no_ack"' in VIEWSONIC
-assert "ShopShell_Hardware_Controller_v2.4" in MAIN
+assert "ShopShell_Hardware_Controller_v2.5" in MAIN
 
-# Cold-boot safety invariant: the gain ramp cannot begin until deterministic
-# ViewSonic mute has succeeded. A slow ViewSonic must be retried rather than
-# causing a permanent startup failure.
-mute_pos = MAIN.index("if (viewSonic.setMute(true))")
-queue_pos = MAIN.index("queueNextKlipschBootVolumeChunk()")
-optical_pos = MAIN.index("queueKlipschBootOptical()")
-unmute_pos = MAIN.index("if (viewSonic.setMute(false))")
-assert mute_pos < queue_pos < optical_pos < unmute_pos
-assert "AUDIO_BOOT_MAX_VIEWSONIC_ATTEMPTS" not in MAIN
-assert 'failAudioBootstrap("viewsonic_mute_failed")' not in MAIN
-assert "ViewSonic not ready (%s); retrying" in MAIN
-assert "ViewSonic unmute not ready (%s); retrying" in MAIN
+# Cold-boot invariant: automatic audio bootstrap must not touch the
+# ViewSonic mute state. Manual mute routes remain available for diagnostics.
+bootstrap_start = MAIN.index("void processAudioBootstrap()")
+bootstrap_end = MAIN.index("enum class StartupStage", bootstrap_start)
+bootstrap = MAIN[bootstrap_start:bootstrap_end]
+assert "setMute(" not in bootstrap
+assert "MutingViewSonic" not in bootstrap
+assert "UnmutingViewSonic" not in bootstrap
+assert "WaitingForStartDelay" in bootstrap
+
+queue_pos = bootstrap.index("queueNextKlipschBootVolumeChunk()")
+optical_pos = bootstrap.index("queueKlipschBootOptical()")
+assert queue_pos < optical_pos
 
 # Queue-capacity invariant: the 70-step ramp is fed in bounded chunks and
 # Optical is not selected until the volume queue has drained.
@@ -59,5 +58,5 @@ assert "klipschQueueDepth() >= KLIPSCH_BOOT_QUEUE_WATERMARK" in MAIN
 assert 'audioBootstrapStage = AudioBootstrapStage::SelectingKlipschOptical' in MAIN
 
 print("PASS: ViewSonic + appliance boot/shutdown contract")
-print("  retry ViewSonic until ready -> incremental 70-step Klipsch max -> Optical -> unmute")
+print("  ViewSonic mute state untouched -> incremental 70-step Klipsch max -> Optical")
 print("  ViewSonic standby exposed for coordinated shutdown")
