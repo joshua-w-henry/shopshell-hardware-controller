@@ -304,6 +304,8 @@ void handleKlipschRequest()
     httpServer.send(200, "application/json", json);
 }
 
+bool deadlineReached(uint32_t deadline);
+
 enum class AudioBootstrapStage
 {
     WaitingForNetwork,
