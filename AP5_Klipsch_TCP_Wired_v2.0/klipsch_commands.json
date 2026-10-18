@@ -1,0 +1,149 @@
+{
+  "model": "Klipsch R-15PM",
+  "encoding": "logical NEC address 0x02, MSB-first reversed raw bytes; RMT 1us pulses; no 38 kHz carrier",
+  "command_count": 15,
+  "commands": [
+    {
+      "path": "/klipsch/power",
+      "label": "Power toggle",
+      "logical_address": "0x02",
+      "logical_command": "0x0A",
+      "raw": "0x40BF50AF",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/mute",
+      "label": "Mute toggle",
+      "logical_address": "0x02",
+      "logical_command": "0x0D",
+      "raw": "0x40BFB04F",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/volume/up",
+      "label": "Volume up",
+      "logical_address": "0x02",
+      "logical_command": "0x1C",
+      "raw": "0x40BF38C7",
+      "repeatable": true,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/volume/down",
+      "label": "Volume down",
+      "logical_address": "0x02",
+      "logical_command": "0x07",
+      "raw": "0x40BFE01F",
+      "repeatable": true,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/sub/up",
+      "label": "Subwoofer level up",
+      "logical_address": "0x02",
+      "logical_command": "0x0C",
+      "raw": "0x40BF30CF",
+      "repeatable": true,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/sub/down",
+      "label": "Subwoofer level down",
+      "logical_address": "0x02",
+      "logical_command": "0x04",
+      "raw": "0x40BF20DF",
+      "repeatable": true,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/sub/reset",
+      "label": "Subwoofer reset",
+      "logical_address": "0x02",
+      "logical_command": "0x03",
+      "raw": "0x40BFC03F",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/led",
+      "label": "LED indicator toggle",
+      "logical_address": "0x02",
+      "logical_command": "0x08",
+      "raw": "0x40BF10EF",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/media/play-pause",
+      "label": "Play / pause",
+      "logical_address": "0x02",
+      "logical_command": "0x1E",
+      "raw": "0x40BF7887",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/media/previous",
+      "label": "Previous track",
+      "logical_address": "0x02",
+      "logical_command": "0x02",
+      "raw": "0x40BF40BF",
+      "repeatable": true,
+      "source": "flipper_r15pm"
+    },
+    {
+      "path": "/klipsch/input/phono",
+      "label": "Phono source",
+      "logical_address": "0x02",
+      "logical_command": "0x01",
+      "raw": "0x40BF807F",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/input/aux",
+      "label": "Auxiliary source",
+      "logical_address": "0x02",
+      "logical_command": "0x09",
+      "raw": "0x40BF906F",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/input/optical",
+      "label": "Optical source",
+      "logical_address": "0x02",
+      "logical_command": "0x00",
+      "raw": "0x40BF00FF",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/input/usb",
+      "label": "USB source",
+      "logical_address": "0x02",
+      "logical_command": "0x48",
+      "raw": "0x40BF12ED",
+      "repeatable": false,
+      "source": "klipsch"
+    },
+    {
+      "path": "/klipsch/input/bluetooth",
+      "label": "Bluetooth source",
+      "logical_address": "0x02",
+      "logical_command": "0x5C",
+      "raw": "0x40BF3AC5",
+      "repeatable": false,
+      "source": "klipsch"
+    }
+  ],
+  "not_yet_verified": [
+    "Track Next"
+  ],
+  "firmware": "AP5_Klipsch_Wired_NEC_v2.0",
+  "transport": "wired_demodulated_active_low_NEC",
+  "gpio25_behavior": "HIGH at 2N2222 base produces LOW on Klipsch IR data, LOW = idle/open transistor",
+  "status": "The electrical interface and Klipsch speaker response to wired pulses are UNVALIDATED"
+}
