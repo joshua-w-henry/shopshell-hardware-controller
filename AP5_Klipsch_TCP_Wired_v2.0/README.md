@@ -1,6 +1,6 @@
-# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.3
+# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.4
 
-**Firmware ID:** `ShopShell_Hardware_Controller_v2.3`  
+**Firmware ID:** `ShopShell_Hardware_Controller_v2.4`  
 **Target:** ESP32 Dev Module, PlatformIO, Arduino / Espressif32 6.12.0  
 **Network hostname:** `promethean-shop`  
 **Primary role:** local low-level hardware controller for the ShopShell station.
@@ -40,7 +40,7 @@ This runs locally and does not depend on Wi-Fi, ShopShell, Home Assistant, or In
 
 ### Appliance boot audio normalization
 
-After Wi-Fi comes up, v2.3 performs a second, fail-safe hardware initialization sequence:
+After Wi-Fi comes up, v2.4 performs a second, fail-safe hardware initialization sequence:
 
 1. Begin checking the ViewSonic IFP6570 at `192.168.87.74:5000`.
 2. Retry every 2 seconds until deterministic ViewSonic **Mute ON** succeeds with a valid `401+<CR>` acknowledgement. A slow cold boot is therefore a wait state, not a permanent failure.
@@ -62,7 +62,7 @@ The ESP32 now speaks the native IFP70 LAN protocol directly to the ViewSonic:
 - Mute ON: `801s6001<CR>`
 - Mute OFF: `801s6000<CR>`
 - Power ON: `801s!001<CR>`
-- Standby: `801s!000<CR>`
+- Standby: `801s!000<CR>` — a complete TCP write counts as accepted even if the panel drops LAN control before returning `401+<CR>` during its Android shutdown countdown.
 
 `POST /system/shutdown` sends ViewSonic standby and requires a valid set-command acknowledgement. ShopShell uses this as a **best-effort** display step after arming the S31 delayed AC cutoff; a display-control failure must not prevent normal Windows shutdown.
 
@@ -113,7 +113,7 @@ The old AP5 UART/MAX3232 hardware is retained as a general serial interface:
 | Raw TCP bridge | port 2323 |
 | USB serial passthrough | ESP32 USB serial ↔ UART2 |
 
-No AP5-specific serial command is sent automatically in v2.3.
+No AP5-specific serial command is sent automatically in v2.4.
 
 ### Optional optical IR diagnostic
 
@@ -192,7 +192,7 @@ Named command routes:
 3. Build and upload.
 4. Open Serial Monitor at 115,200 baud.
 5. Confirm startup messages show the HDMI GPIO map, Klipsch RMT ready, and two Dell/Input-1 source selections.
-6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.3`.
+6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.4`.
 7. Use the standalone commissioning console in `tools/` to test each HDMI input and the existing Klipsch controls.
 
 ## Commissioning cautions
@@ -206,7 +206,7 @@ Named command routes:
 
 ## Verification
 
-`tests/test_nec_waveform.py` continues to validate the Klipsch NEC field encoding and timing assumptions. Hardware acceptance for v2.3 is:
+`tests/test_nec_waveform.py` continues to validate the Klipsch NEC field encoding and timing assumptions. Hardware acceptance for v2.4 is:
 
 - Input 1 selects Dell / ShopShell.
 - Input 2 selects PS4.
@@ -216,7 +216,7 @@ Named command routes:
 - Existing Klipsch wired controls remain functional.
 - General RS-232 TCP bridge still listens on port 2323.
 
-### v2.3 additional acceptance
+### v2.4 additional acceptance
 
 - ViewSonic Mute ON returns a valid acknowledgement over TCP 5000.
 - Automatic boot reaches `audio_stage=complete` with no audio blast during the max-gain ramp.
