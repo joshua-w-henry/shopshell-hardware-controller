@@ -15,7 +15,7 @@ namespace {
 constexpr gpio_num_t TX_PIN = GPIO_NUM_25;
 constexpr rmt_channel_t TX_CHANNEL = RMT_CHANNEL_0;
 constexpr uint16_t NEC_ADDRESS = 0x02;
-constexpr uint8_t MAX_QUEUE = 32;
+constexpr uint8_t MAX_QUEUE = 96;
 constexpr uint32_t FIRST_TO_NEXT_REPEAT_MS = 110;
 constexpr uint32_t INTER_PRESS_MS = 135;
 constexpr uint16_t NEC_LEADER_MARK_US = 9000;

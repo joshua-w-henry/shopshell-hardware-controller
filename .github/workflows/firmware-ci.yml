@@ -1,0 +1,39 @@
+name: Firmware CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: AP5_Klipsch_TCP_Wired_v2.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Create CI Wi-Fi secrets stub
+        run: cp src/secrets.h.example src/secrets.h
+
+      - name: Build ESP32 firmware
+        run: pio run
+
+      - name: Run protocol contract tests
+        run: |
+          python tests/test_nec_waveform.py
+          python tests/test_hdmi_contract.py
+          python tests/test_appliance_contract.py

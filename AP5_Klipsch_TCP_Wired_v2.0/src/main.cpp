@@ -7,25 +7,48 @@
 
 #include "secrets.h"
 #include "KlipschWired.h"
+#include "ViewSonicLan.h"
 
 static constexpr char HOSTNAME[] = "promethean-shop";
 static constexpr uint16_t TCP_PORT = 2323;
 static constexpr uint16_t HTTP_PORT = 80;
-static constexpr int PANEL_RX = 16;
-static constexpr int PANEL_TX = 17;
-static constexpr uint16_t IR_RX_PIN = 26; // IR receiver OUT: 3.3 V logic
-static constexpr uint32_t PANEL_BAUD = 38400;
 
-// Startup sequence after S31 restores AC / Dell powers the ESP32.
-// This runs locally and does NOT wait for Wi-Fi.
-static constexpr uint32_t STARTUP_POWER_DELAY_MS = 5000;
-static constexpr uint32_t STARTUP_INPUT_DELAY_MS = 7000;
-static constexpr uint32_t STARTUP_INPUT_REASSERT_DELAY_MS = 10000;
+// General RS-232 bridge retained from the AP5 installation. It is no longer
+// used for display source selection, but remains available for future shop
+// hardware on the existing MAX3232 interface.
+static constexpr int SERIAL_RX = 16;
+static constexpr int SERIAL_TX = 17;
+static constexpr uint32_t SERIAL_BAUD = 38400;
 
-HardwareSerial PanelSerial(2);
+static constexpr uint16_t IR_RX_PIN = 26; // optional optical receiver diagnostic
+
+// Amazon 3-input HDMI switch wired-remote emulation. The switch holds each
+// signal at ~3.27 V and a physical button pulls one signal to common/ground.
+// HIGH on these open-drain outputs means released/high-Z; LOW means pressed.
+static constexpr uint8_t HDMI_DELL_PIN = 27;  // remote pin 1: Input 1 / Dell / ShopShell
+static constexpr uint8_t HDMI_PS4_PIN = 32;   // remote pin 3: Input 2 / PS4
+static constexpr uint8_t HDMI_APPLE_PIN = 33; // remote pin 2: Input 3 / Apple TV
+static constexpr uint8_t HDMI_CYCLE_PIN = 21; // remote pin 4: Cycle
+static constexpr uint16_t HDMI_PRESS_MS = 160;
+static constexpr uint32_t STARTUP_HDMI_DELAY_MS = 3000;
+static constexpr uint32_t STARTUP_HDMI_REASSERT_DELAY_MS = 2500;
+
+// Appliance boot audio policy:
+// 1) leave ViewSonic / Windows mute state completely untouched,
+// 2) saturate the Klipsch internal gain at maximum,
+// 3) select Optical after the gain ramp has drained.
+//
+// ViewSonic mute/unmute is intentionally excluded from automatic boot because
+// it can interact with the Windows audio endpoint/mixer state.
+static constexpr uint16_t KLIPSCH_BOOT_MAX_STEPS = 70;
+static constexpr uint8_t KLIPSCH_BOOT_QUEUE_WATERMARK = 20;
+static constexpr uint32_t AUDIO_BOOT_NOT_BEFORE_MS = 7000;
+
+HardwareSerial SerialBridge(2);
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
 WebServer httpServer(HTTP_PORT);
+ViewSonicLanControl viewSonic(IPAddress(192, 168, 87, 74));
 
 // Optional optical IR receive diagnostic, independent of wired GPIO25 output.
 IRrecv irReceiver(IR_RX_PIN);
@@ -73,23 +96,47 @@ void processIrReceiver()
     irReceiver.resume();
 }
 
-
 bool networkServicesStarted = false;
 
-// AP5 commands from ap5.commands.
-static const uint8_t CMD_POWER_ON[]  = {0xF6, 0x01, 0x01, 0x01, 0xF9, 0x6F};
-static const uint8_t CMD_POWER_OFF[] = {0xF6, 0x01, 0x01, 0x00, 0xF8, 0x6F};
-static const uint8_t CMD_HDMI1[] = {0xF6, 0x30, 0x01, 0x09, 0x30, 0x6F};
-static const uint8_t CMD_HDMI2[] = {0xF6, 0x30, 0x01, 0x0A, 0x31, 0x6F};
-static const uint8_t CMD_HDMI3[] = {0xF6, 0x30, 0x01, 0x13, 0x3A, 0x6F};
-static const uint8_t CMD_HDMI4[] = {0xF6, 0x30, 0x01, 0x14, 0x3B, 0x6F};
-static const uint8_t CMD_OPS[]   = {0xF6, 0x30, 0x01, 0x12, 0x39, 0x6F};
+// HDMI switch command history. There is no feedback wire, so this records only
+// what the ESP32 commanded, not the physical selected source.
+const char *hdmiLastAction = "none";
+uint32_t hdmiLastCommandMs = 0;
+uint32_t hdmiCommandCount = 0;
 
-template <size_t N>
-void sendPanelCommand(const uint8_t (&command)[N])
+void releaseAllHdmiSwitchLines()
 {
-    PanelSerial.write(command, N);
-    PanelSerial.flush();
+    digitalWrite(HDMI_DELL_PIN, HIGH);
+    digitalWrite(HDMI_PS4_PIN, HIGH);
+    digitalWrite(HDMI_APPLE_PIN, HIGH);
+    digitalWrite(HDMI_CYCLE_PIN, HIGH);
+}
+
+void beginHdmiSwitch()
+{
+    digitalWrite(HDMI_DELL_PIN, HIGH);
+    digitalWrite(HDMI_PS4_PIN, HIGH);
+    digitalWrite(HDMI_APPLE_PIN, HIGH);
+    digitalWrite(HDMI_CYCLE_PIN, HIGH);
+    pinMode(HDMI_DELL_PIN, OUTPUT_OPEN_DRAIN);
+    pinMode(HDMI_PS4_PIN, OUTPUT_OPEN_DRAIN);
+    pinMode(HDMI_APPLE_PIN, OUTPUT_OPEN_DRAIN);
+    pinMode(HDMI_CYCLE_PIN, OUTPUT_OPEN_DRAIN);
+    releaseAllHdmiSwitchLines();
+    Serial.println("HDMI switch ready: GPIO27=Dell, GPIO32=PS4, GPIO33=Apple TV, GPIO21=Cycle");
+}
+
+void pulseHdmiSwitch(uint8_t pin, const char *action)
+{
+    releaseAllHdmiSwitchLines();
+    delay(2);
+    digitalWrite(pin, LOW);
+    delay(HDMI_PRESS_MS);
+    digitalWrite(pin, HIGH);
+    hdmiLastAction = action;
+    hdmiLastCommandMs = millis();
+    ++hdmiCommandCount;
+    Serial.printf("HDMI switch: %s (GPIO%u, %u ms)\n", action, pin, HDMI_PRESS_MS);
 }
 
 void sendJsonOk(const char *action)
@@ -99,6 +146,11 @@ void sendJsonOk(const char *action)
     json += "\"}";
     httpServer.send(200, "application/json", json);
 }
+
+void selectHdmiDell() { pulseHdmiSwitch(HDMI_DELL_PIN, "hdmi/input/1:dell"); }
+void selectHdmiPs4() { pulseHdmiSwitch(HDMI_PS4_PIN, "hdmi/input/2:ps4"); }
+void selectHdmiAppleTv() { pulseHdmiSwitch(HDMI_APPLE_PIN, "hdmi/input/3:apple-tv"); }
+void cycleHdmiInput() { pulseHdmiSwitch(HDMI_CYCLE_PIN, "hdmi/cycle"); }
 
 // Dynamic Klipsch HTTP API. Single canonical command table in KlipschWired.cpp.
 // GET for manual browser tests; POST for ShopShell and Home Assistant.
@@ -251,15 +303,177 @@ void handleKlipschRequest()
     httpServer.send(200, "application/json", json);
 }
 
+bool deadlineReached(uint32_t deadline);
+
+enum class AudioBootstrapStage
+{
+    WaitingForStartDelay,
+    WaitingForKlipschIdle,
+    QueueingKlipschNormalization,
+    WaitingForKlipschNormalization,
+    SelectingKlipschOptical,
+    WaitingForKlipschOptical,
+    Complete,
+    Failed
+};
+
+AudioBootstrapStage audioBootstrapStage = AudioBootstrapStage::WaitingForStartDelay;
+uint32_t audioBootstrapDeadlineMs = 0;
+uint16_t audioBootstrapKlipschStepsQueued = 0;
+String audioBootstrapError = "none";
+
+const char *audioBootstrapStageName()
+{
+    switch (audioBootstrapStage)
+    {
+        case AudioBootstrapStage::WaitingForStartDelay: return "waiting_for_start_delay";
+        case AudioBootstrapStage::WaitingForKlipschIdle: return "waiting_for_klipsch_idle";
+        case AudioBootstrapStage::QueueingKlipschNormalization: return "queueing_klipsch_normalization";
+        case AudioBootstrapStage::WaitingForKlipschNormalization: return "waiting_for_klipsch_normalization";
+        case AudioBootstrapStage::SelectingKlipschOptical: return "selecting_klipsch_optical";
+        case AudioBootstrapStage::WaitingForKlipschOptical: return "waiting_for_klipsch_optical";
+        case AudioBootstrapStage::Complete: return "complete";
+        case AudioBootstrapStage::Failed: return "failed";
+    }
+    return "unknown";
+}
+
+bool audioBootstrapInProgress()
+{
+    return audioBootstrapStage != AudioBootstrapStage::Complete &&
+           audioBootstrapStage != AudioBootstrapStage::Failed;
+}
+
+void beginAudioBootstrap(bool immediate = false)
+{
+    audioBootstrapStage = AudioBootstrapStage::WaitingForStartDelay;
+    audioBootstrapDeadlineMs = millis() + (immediate ? 0 : AUDIO_BOOT_NOT_BEFORE_MS);
+    audioBootstrapKlipschStepsQueued = 0;
+    audioBootstrapError = "none";
+}
+
+void failAudioBootstrap(const char *reason)
+{
+    audioBootstrapError = reason;
+    audioBootstrapStage = AudioBootstrapStage::Failed;
+    Serial.printf("Audio bootstrap FAILED SAFE: %s\n", reason);
+}
+
+bool queueNextKlipschBootVolumeChunk()
+{
+    const KlipschCommand *volumeUp = findKlipschCommand("volume/up");
+    if (!volumeUp || !klipschTxReady())
+        return false;
+
+    if (audioBootstrapKlipschStepsQueued >= KLIPSCH_BOOT_MAX_STEPS)
+        return true;
+
+    // Feed the existing NEC queue incrementally instead of assuming a specific
+    // queue capacity. This keeps the bootstrap nonblocking and leaves headroom
+    // for the transmitter state machine while the 70-step ramp is in progress.
+    if (klipschQueueDepth() >= KLIPSCH_BOOT_QUEUE_WATERMARK)
+        return true;
+
+    const uint16_t remaining =
+        KLIPSCH_BOOT_MAX_STEPS - audioBootstrapKlipschStepsQueued;
+    const uint8_t chunk =
+        remaining > 10 ? 10 : static_cast<uint8_t>(remaining);
+
+    if (!queueKlipschWired(volumeUp->command, chunk, 0))
+        return true; // Queue may be temporarily busy; retry on the next loop.
+
+    audioBootstrapKlipschStepsQueued += chunk;
+    Serial.printf("Audio bootstrap: queued %u/%u Volume Up presses\n",
+                  audioBootstrapKlipschStepsQueued,
+                  KLIPSCH_BOOT_MAX_STEPS);
+    return true;
+}
+
+bool queueKlipschBootOptical()
+{
+    const KlipschCommand *optical = findKlipschCommand("input/optical");
+    return optical &&
+           klipschTxReady() &&
+           queueKlipschWired(optical->command, 1, 0);
+}
+
+void processAudioBootstrap()
+{
+    switch (audioBootstrapStage)
+    {
+        case AudioBootstrapStage::WaitingForStartDelay:
+            if (!deadlineReached(audioBootstrapDeadlineMs))
+                return;
+            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschIdle;
+            break;
+
+        case AudioBootstrapStage::WaitingForKlipschIdle:
+            if (klipschQueueDepth() != 0)
+                return;
+            audioBootstrapStage = AudioBootstrapStage::QueueingKlipschNormalization;
+            break;
+
+        case AudioBootstrapStage::QueueingKlipschNormalization:
+            if (!klipschTxReady() ||
+                findKlipschCommand("volume/up") == nullptr)
+            {
+                failAudioBootstrap("klipsch_volume_command_unavailable");
+                return;
+            }
+
+            if (!queueNextKlipschBootVolumeChunk())
+            {
+                failAudioBootstrap("klipsch_volume_queue_unavailable");
+                return;
+            }
+
+            if (audioBootstrapKlipschStepsQueued >= KLIPSCH_BOOT_MAX_STEPS)
+                audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschNormalization;
+            return;
+
+        case AudioBootstrapStage::WaitingForKlipschNormalization:
+            if (klipschQueueDepth() != 0)
+                return;
+            Serial.println("Audio bootstrap: Klipsch max-volume ramp complete");
+            audioBootstrapStage = AudioBootstrapStage::SelectingKlipschOptical;
+            break;
+
+        case AudioBootstrapStage::SelectingKlipschOptical:
+            if (!queueKlipschBootOptical())
+            {
+                if (!klipschTxReady() ||
+                    findKlipschCommand("input/optical") == nullptr)
+                {
+                    failAudioBootstrap("klipsch_optical_command_unavailable");
+                }
+                return;
+            }
+            Serial.println("Audio bootstrap: Klipsch Optical queued");
+            audioBootstrapStage = AudioBootstrapStage::WaitingForKlipschOptical;
+            return;
+
+        case AudioBootstrapStage::WaitingForKlipschOptical:
+            if (klipschQueueDepth() != 0)
+                return;
+            audioBootstrapStage = AudioBootstrapStage::Complete;
+            audioBootstrapError = "none";
+            Serial.println("Audio bootstrap complete: Klipsch max + Optical; ViewSonic audio state untouched");
+            return;
+
+        case AudioBootstrapStage::Complete:
+        case AudioBootstrapStage::Failed:
+            return;
+    }
+}
+
 enum class StartupStage
 {
-    WaitForPanelPower,
-    WaitForFirstInputSelect,
-    WaitForInputReassert,
+    WaitForHdmiSwitch,
+    WaitForDellReassert,
     Complete
 };
 
-StartupStage startupStage = StartupStage::WaitForPanelPower;
+StartupStage startupStage = StartupStage::WaitForHdmiSwitch;
 uint32_t startupDeadlineMs = 0;
 
 bool deadlineReached(uint32_t deadline)
@@ -269,8 +483,8 @@ bool deadlineReached(uint32_t deadline)
 
 void beginStartupSequence()
 {
-    startupStage = StartupStage::WaitForPanelPower;
-    startupDeadlineMs = millis() + STARTUP_POWER_DELAY_MS;
+    startupStage = StartupStage::WaitForHdmiSwitch;
+    startupDeadlineMs = millis() + STARTUP_HDMI_DELAY_MS;
 }
 
 void processStartupSequence()
@@ -280,25 +494,18 @@ void processStartupSequence()
 
     switch (startupStage)
     {
-        case StartupStage::WaitForPanelPower:
-            Serial.println("Startup: AP5 Power On");
-            sendPanelCommand(CMD_POWER_ON);
-            startupStage = StartupStage::WaitForFirstInputSelect;
-            startupDeadlineMs = millis() + STARTUP_INPUT_DELAY_MS;
+        case StartupStage::WaitForHdmiSwitch:
+            Serial.println("Startup: HDMI switch -> Dell / Input 1");
+            selectHdmiDell();
+            startupStage = StartupStage::WaitForDellReassert;
+            startupDeadlineMs = millis() + STARTUP_HDMI_REASSERT_DELAY_MS;
             break;
 
-        case StartupStage::WaitForFirstInputSelect:
-            Serial.println("Startup: AP5 -> HDMI2");
-            sendPanelCommand(CMD_HDMI2);
-            startupStage = StartupStage::WaitForInputReassert;
-            startupDeadlineMs = millis() + STARTUP_INPUT_REASSERT_DELAY_MS;
-            break;
-
-        case StartupStage::WaitForInputReassert:
-            Serial.println("Startup: AP5 -> HDMI2 (reassert)");
-            sendPanelCommand(CMD_HDMI2);
+        case StartupStage::WaitForDellReassert:
+            Serial.println("Startup: HDMI switch -> Dell / Input 1 (reassert)");
+            selectHdmiDell();
             startupStage = StartupStage::Complete;
-            Serial.println("Startup sequence complete");
+            Serial.println("Startup source selection complete");
             break;
 
         case StartupStage::Complete:
@@ -313,59 +520,140 @@ void configureHttpRoutes()
         String json = "{";
         json += "\"ok\":true,";
         json += "\"device\":\"promethean-shop\",";
-        json += "\"panel\":\"AP5\",";
-        json += "\"panel_baud\":" + String(PANEL_BAUD) + ",";
+        json += "\"role\":\"shopshell-hardware-controller\",";
         json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
-        json += "\"firmware\":\"AP5_Klipsch_Wired_NEC_v2.0\"";
+        json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.6\",";
+        json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
     });
 
-    httpServer.on("/panel/power/on", HTTP_POST, []()
+    httpServer.on("/hdmi/status", HTTP_GET, []()
     {
-        sendPanelCommand(CMD_POWER_ON);
-        sendJsonOk("panel/power/on");
+        String json = "{\"ok\":true,";
+        json += "\"transport\":\"open_drain_button_emulation\",";
+        json += "\"button_ms\":" + String(HDMI_PRESS_MS) + ",";
+        json += "\"input1\":{\"name\":\"Dell / ShopShell\",\"gpio\":27,\"remote_pin\":1},";
+        json += "\"input2\":{\"name\":\"PS4\",\"gpio\":32,\"remote_pin\":3},";
+        json += "\"input3\":{\"name\":\"Apple TV\",\"gpio\":33,\"remote_pin\":2},";
+        json += "\"cycle\":{\"gpio\":21,\"remote_pin\":4},";
+        json += "\"common_remote_pin\":5,";
+        json += "\"last_action\":\"" + String(hdmiLastAction) + "\",";
+        json += "\"last_command_ms\":" + String(hdmiLastCommandMs) + ",";
+        json += "\"command_count\":" + String(hdmiCommandCount);
+        json += "}";
+        httpServer.send(200, "application/json", json);
     });
 
-    httpServer.on("/panel/power/off", HTTP_POST, []()
+    httpServer.on("/hdmi/input/1", HTTP_POST, []() { selectHdmiDell(); sendJsonOk("hdmi/input/1"); });
+    httpServer.on("/hdmi/dell", HTTP_POST, []() { selectHdmiDell(); sendJsonOk("hdmi/dell"); });
+    httpServer.on("/hdmi/input/2", HTTP_POST, []() { selectHdmiPs4(); sendJsonOk("hdmi/input/2"); });
+    httpServer.on("/hdmi/ps4", HTTP_POST, []() { selectHdmiPs4(); sendJsonOk("hdmi/ps4"); });
+    httpServer.on("/hdmi/input/3", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/input/3"); });
+    httpServer.on("/hdmi/apple-tv", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/apple-tv"); });
+    httpServer.on("/hdmi/cycle", HTTP_POST, []() { cycleHdmiInput(); sendJsonOk("hdmi/cycle"); });
+
+    httpServer.on("/viewsonic/status", HTTP_GET, []()
     {
-        sendPanelCommand(CMD_POWER_OFF);
-        sendJsonOk("panel/power/off");
+        String json = "{\"ok\":true,";
+        json += "\"address\":\"192.168.87.74:5000\",";
+        json += "\"last_ok\":" + String(viewSonic.lastOk() ? "true" : "false") + ",";
+        json += "\"last_command\":\"" + viewSonic.lastCommand() + "\",";
+        json += "\"last_reply\":\"" + viewSonic.lastReply() + "\",";
+        json += "\"last_attempt_ms\":" + String(viewSonic.lastAttemptMs()) + "}";
+        httpServer.send(200, "application/json", json);
     });
 
-    httpServer.on("/panel/input/hdmi1", HTTP_POST, []()
+    httpServer.on("/viewsonic/input/status", HTTP_GET, []()
     {
-        sendPanelCommand(CMD_HDMI1);
-        sendJsonOk("panel/input/hdmi1");
+        String source;
+        String rawValue;
+        bool signalDetected = false;
+
+        if (!viewSonic.getInput(source, signalDetected, rawValue))
+        {
+            jsonError(502, "ViewSonic input query failed");
+            return;
+        }
+
+        String json = "{\"ok\":true,";
+        json += "\"source\":\"" + source + "\",";
+        json += "\"signal_detected\":" + String(signalDetected ? "true" : "false") + ",";
+        json += "\"raw_value\":\"" + rawValue + "\"}";
+        httpServer.send(200, "application/json", json);
     });
 
-    httpServer.on("/panel/input/hdmi2", HTTP_POST, []()
+    httpServer.on("/viewsonic/input/dp", HTTP_POST, []()
     {
-        sendPanelCommand(CMD_HDMI2);
-        sendJsonOk("panel/input/hdmi2");
+        if (viewSonic.setDisplayPort()) sendJsonOk("viewsonic/input/dp");
+        else jsonError(502, "ViewSonic DisplayPort selection failed");
     });
 
-    httpServer.on("/panel/input/hdmi3", HTTP_POST, []()
+    httpServer.on("/viewsonic/input/hdmi1", HTTP_POST, []()
     {
-        sendPanelCommand(CMD_HDMI3);
-        sendJsonOk("panel/input/hdmi3");
+        if (viewSonic.setHdmi1()) sendJsonOk("viewsonic/input/hdmi1");
+        else jsonError(502, "ViewSonic HDMI1 selection failed");
     });
 
-    httpServer.on("/panel/input/hdmi4", HTTP_POST, []()
+    httpServer.on("/viewsonic/mute/on", HTTP_POST, []()
     {
-        sendPanelCommand(CMD_HDMI4);
-        sendJsonOk("panel/input/hdmi4");
+        if (viewSonic.setMute(true)) sendJsonOk("viewsonic/mute/on");
+        else jsonError(502, "ViewSonic mute command failed");
     });
 
-    httpServer.on("/panel/input/ops", HTTP_POST, []()
+    httpServer.on("/viewsonic/mute/off", HTTP_POST, []()
     {
-        sendPanelCommand(CMD_OPS);
-        sendJsonOk("panel/input/ops");
+        if (viewSonic.setMute(false)) sendJsonOk("viewsonic/mute/off");
+        else jsonError(502, "ViewSonic unmute command failed");
     });
 
-    // Optional optical IR receiver GPIO26 diagnostic only; wired GPIO25 TX is not optical.
+    httpServer.on("/viewsonic/power/on", HTTP_POST, []()
+    {
+        if (viewSonic.setPowerOn()) sendJsonOk("viewsonic/power/on");
+        else jsonError(502, "ViewSonic power-on command failed");
+    });
+
+    httpServer.on("/viewsonic/standby", HTTP_POST, []()
+    {
+        if (viewSonic.setStandby()) sendJsonOk("viewsonic/standby");
+        else jsonError(502, "ViewSonic standby command failed");
+    });
+
+    httpServer.on("/system/audio/bootstrap", HTTP_POST, []()
+    {
+        if (audioBootstrapInProgress())
+        {
+            jsonError(409, "Audio bootstrap already in progress");
+            return;
+        }
+        beginAudioBootstrap(true);
+        sendJsonOk("system/audio/bootstrap");
+    });
+
+    httpServer.on("/system/startup/status", HTTP_GET, []()
+    {
+        String json = "{\"ok\":true,";
+        json += "\"audio_stage\":\"" + String(audioBootstrapStageName()) + "\",";
+        json += "\"audio_error\":\"" + audioBootstrapError + "\",";
+        json += "\"klipsch_queue_depth\":" + String(klipschQueueDepth()) + ",";
+        json += "\"viewsonic_last_ok\":" + String(viewSonic.lastOk() ? "true" : "false") + ",";
+        json += "\"viewsonic_last_command\":\"" + viewSonic.lastCommand() + "\",";
+        json += "\"viewsonic_last_reply\":\"" + viewSonic.lastReply() + "\"}";
+        httpServer.send(200, "application/json", json);
+    });
+
+    httpServer.on("/system/shutdown", HTTP_POST, []()
+    {
+        // CEC "display off -> player off" is enabled on the ViewSonic. Putting
+        // the panel into standby therefore gives attached CEC-capable sources
+        // a clean appliance-style shutdown signal before station AC is removed.
+        if (viewSonic.setStandby()) sendJsonOk("system/shutdown");
+        else jsonError(502, "ViewSonic standby command failed");
+    });
+
     httpServer.on("/ir/last", HTTP_GET, []()
     {
         String json = "{\"rx_gpio\":26,\"count\":" + String(irReceiveCount);
@@ -379,14 +667,10 @@ void configureHttpRoutes()
         httpServer.send(200, "application/json", json);
     });
 
-    // One dispatcher handles every documented Klipsch command, wired transport,
-    // aliases, bounded volume steps, and manual NEC code experiments.
     httpServer.onNotFound([]()
     {
-        if (httpServer.uri().startsWith("/klipsch/"))
-            handleKlipschRequest();
-        else
-            jsonError(404, "not found");
+        if (httpServer.uri().startsWith("/klipsch/")) handleKlipschRequest();
+        else jsonError(404, "not found");
     });
 }
 
@@ -410,7 +694,7 @@ void processNetworkState()
 
         Serial.printf("Hostname: %s\n", HOSTNAME);
         Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("TCP bridge listening on port %u\n", TCP_PORT);
+        Serial.printf("RS-232 TCP bridge listening on port %u\n", TCP_PORT);
         Serial.printf("HTTP API listening on port %u\n", HTTP_PORT);
     }
 }
@@ -436,21 +720,21 @@ void processTcpBridge()
     if (tcpClient && tcpClient.connected())
     {
         while (tcpClient.available())
-            PanelSerial.write(static_cast<uint8_t>(tcpClient.read()));
+            SerialBridge.write(static_cast<uint8_t>(tcpClient.read()));
     }
 }
 
 void processUsbPassthrough()
 {
     while (Serial.available())
-        PanelSerial.write(static_cast<uint8_t>(Serial.read()));
+        SerialBridge.write(static_cast<uint8_t>(Serial.read()));
 }
 
-void processPanelResponses()
+void processSerialResponses()
 {
-    while (PanelSerial.available())
+    while (SerialBridge.available())
     {
-        uint8_t value = static_cast<uint8_t>(PanelSerial.read());
+        uint8_t value = static_cast<uint8_t>(SerialBridge.read());
         Serial.write(value);
 
         if (tcpClient && tcpClient.connected())
@@ -463,16 +747,18 @@ void setup()
     Serial.begin(115200);
     delay(100);
 
-    PanelSerial.begin(PANEL_BAUD, SERIAL_8N1, PANEL_RX, PANEL_TX);
+    SerialBridge.begin(SERIAL_BAUD, SERIAL_8N1, SERIAL_RX, SERIAL_TX);
     beginKlipschWired(); // GPIO25 via 2N2222; active-low demodulated NEC on Klipsch data wire.
+    beginHdmiSwitch();
     irReceiver.enableIRIn(); // GPIO26 optional optical 38 kHz receiver OUT (not wire loopback).
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("Shop Promethean AP5 TCP bridge + Klipsch R-15PM WIRED NEC v2.0");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.6");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
+    beginAudioBootstrap();
 
     configureHttpRoutes();
     beginWiFi();
@@ -480,17 +766,18 @@ void setup()
 
 void loop()
 {
-    // Local panel startup has priority and works even with Wi-Fi down.
+    // Local HDMI default-source startup has priority and works even with Wi-Fi down.
     processStartupSequence();
 
     processNetworkState();
+    processAudioBootstrap();
 
     if (networkServicesStarted)
         httpServer.handleClient();
 
     processTcpBridge();
     processUsbPassthrough();
-    processPanelResponses();
+    processSerialResponses();
     processIrReceiver();
     processKlipschWired(); // ESP32 RMT: carrier-free demodulated pulse envelope
 
