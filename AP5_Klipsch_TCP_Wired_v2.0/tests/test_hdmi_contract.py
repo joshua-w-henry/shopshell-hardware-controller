@@ -27,7 +27,7 @@ for route in (
 assert "STARTUP_HDMI_DELAY_MS" in MAIN
 assert "STARTUP_HDMI_REASSERT_DELAY_MS" in MAIN
 assert "selectHdmiDell();" in MAIN
-assert "ShopShell_Hardware_Controller_v2.2" in MAIN
+assert "ShopShell_Hardware_Controller_v2.6" in MAIN
 
 assert '"/panel/power/' not in MAIN
 assert '"/panel/input/' not in MAIN
@@ -39,4 +39,4 @@ print("  GPIO27 = Dell / Input 1")
 print("  GPIO32 = PS4 / Input 2")
 print("  GPIO33 = Apple TV / Input 3")
 print("  GPIO21 = Cycle")
-print("  open-drain outputs and v2.1 HTTP routes present")
+print("  open-drain outputs and current HTTP routes present")
