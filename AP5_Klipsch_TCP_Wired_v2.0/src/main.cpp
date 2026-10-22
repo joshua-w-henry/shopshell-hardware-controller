@@ -525,7 +525,7 @@ void configureHttpRoutes()
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.5\",";
+        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.6\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
@@ -565,6 +565,37 @@ void configureHttpRoutes()
         json += "\"last_reply\":\"" + viewSonic.lastReply() + "\",";
         json += "\"last_attempt_ms\":" + String(viewSonic.lastAttemptMs()) + "}";
         httpServer.send(200, "application/json", json);
+    });
+
+    httpServer.on("/viewsonic/input/status", HTTP_GET, []()
+    {
+        String source;
+        String rawValue;
+        bool signalDetected = false;
+
+        if (!viewSonic.getInput(source, signalDetected, rawValue))
+        {
+            jsonError(502, "ViewSonic input query failed");
+            return;
+        }
+
+        String json = "{\"ok\":true,";
+        json += "\"source\":\"" + source + "\",";
+        json += "\"signal_detected\":" + String(signalDetected ? "true" : "false") + ",";
+        json += "\"raw_value\":\"" + rawValue + "\"}";
+        httpServer.send(200, "application/json", json);
+    });
+
+    httpServer.on("/viewsonic/input/dp", HTTP_POST, []()
+    {
+        if (viewSonic.setDisplayPort()) sendJsonOk("viewsonic/input/dp");
+        else jsonError(502, "ViewSonic DisplayPort selection failed");
+    });
+
+    httpServer.on("/viewsonic/input/hdmi1", HTTP_POST, []()
+    {
+        if (viewSonic.setHdmi1()) sendJsonOk("viewsonic/input/hdmi1");
+        else jsonError(502, "ViewSonic HDMI1 selection failed");
     });
 
     httpServer.on("/viewsonic/mute/on", HTTP_POST, []()
@@ -723,7 +754,7 @@ void setup()
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.5");
+    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.6");
 
     // Arm before Wi-Fi so startup never depends on network availability.
     beginStartupSequence();
