@@ -1,6 +1,6 @@
-# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.5
+# ShopShell Hardware Controller — HDMI Switch + Klipsch R-15PM v2.6
 
-**Firmware ID:** `ShopShell_Hardware_Controller_v2.5`  
+**Firmware ID:** `ShopShell_Hardware_Controller_v2.6`  
 **Target:** ESP32 Dev Module, PlatformIO, Arduino / Espressif32 6.12.0  
 **Network hostname:** `promethean-shop`  
 **Primary role:** local low-level hardware controller for the ShopShell station.
@@ -17,7 +17,7 @@ The ESP32 therefore emulates the remote with **open-drain GPIO outputs only**:
 
 | Shop function | Remote closure | ESP32 | Firmware route |
 |---|---|---:|---|
-| Dell / ShopShell | pin 5 ↔ pin 1 | GPIO27 | `POST /hdmi/input/1` or `/hdmi/dell` |
+| Legacy Input 1 (formerly Dell) | pin 5 ↔ pin 1 | GPIO27 | `POST /hdmi/input/1` or `/hdmi/dell` |
 | PS4 | pin 5 ↔ pin 3 | GPIO32 | `POST /hdmi/input/2` or `/hdmi/ps4` |
 | Apple TV | pin 5 ↔ pin 2 | GPIO33 | `POST /hdmi/input/3` or `/hdmi/apple-tv` |
 | Cycle | pin 5 ↔ pin 4 | GPIO21 | `POST /hdmi/cycle` |
@@ -54,9 +54,11 @@ The sequence does not depend on ViewSonic LAN availability or Wi-Fi and does not
 
 The boot audio state is exposed by `GET /system/startup/status`, and the sequence can be retriggered manually with `POST /system/audio/bootstrap`.
 
-### ViewSonic LAN / coordinated shutdown
+### ViewSonic LAN / DisplayPort source control / coordinated shutdown
 
-The ESP32 now speaks the native IFP70 LAN protocol directly to the ViewSonic:
+The Dell now connects directly to the ViewSonic over DisplayPort. The HDMI switch is retained for Apple TV and PS4 only. ShopShell treats DisplayPort as its appliance home source and uses HDMI1 when selecting either consumer source.
+
+The ESP32 speaks the native IFP70 LAN protocol directly to the ViewSonic:
 
 - Display address: `192.168.87.74`
 - TCP port: `5000`
@@ -64,6 +66,9 @@ The ESP32 now speaks the native IFP70 LAN protocol directly to the ViewSonic:
 - Mute OFF: `801s6000<CR>`
 - Power ON: `801s!001<CR>`
 - Standby: `801s!000<CR>` — a complete TCP write counts as accepted even if the panel drops LAN control before returning `401+<CR>` during its Android shutdown countdown.
+- DisplayPort: `801s"009<CR>`
+- HDMI1: `801s"004<CR>`
+- Read current input: `801gj000<CR>`; the reply includes both selected source and signal-detect state.
 
 `POST /system/shutdown` sends ViewSonic standby and requires a valid set-command acknowledgement. ShopShell uses this as a **best-effort** display step after arming the S31 delayed AC cutoff; a display-control failure must not prevent normal Windows shutdown.
 
@@ -140,6 +145,9 @@ Base example: `http://192.168.87.42`
 - `POST /viewsonic/mute/off`
 - `POST /viewsonic/power/on`
 - `POST /viewsonic/standby`
+- `GET /viewsonic/input/status`
+- `POST /viewsonic/input/dp`
+- `POST /viewsonic/input/hdmi1`
 - `GET /system/startup/status` — current boot-audio stage and any failure.
 - `POST /system/audio/bootstrap` — manually rerun the safe audio-normalization sequence.
 - `POST /system/shutdown` — request ViewSonic standby for coordinated station shutdown.
@@ -192,7 +200,7 @@ Named command routes:
 3. Build and upload.
 4. Open Serial Monitor at 115,200 baud.
 5. Confirm startup messages show the HDMI GPIO map, Klipsch RMT ready, and two Dell/Input-1 source selections.
-6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.5`.
+6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.6`.
 7. Use the standalone commissioning console in `tools/` to test each HDMI input and the existing Klipsch controls.
 
 ## Commissioning cautions
