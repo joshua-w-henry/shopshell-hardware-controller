@@ -11,6 +11,9 @@ public:
     bool setStandby();
     bool setPowerOn();
     bool setMute(bool muted);
+    bool setDisplayPort();
+    bool setHdmi1();
+    bool getInput(String &source, bool &signalDetected, String &rawValue);
 
     bool lastOk() const { return _lastOk; }
     const String &lastCommand() const { return _lastCommand; }
@@ -21,6 +24,10 @@ private:
     bool sendSetCommand(
         const char *command,
         bool acceptSuccessfulWriteWithoutReply = false);
+    bool sendGetCommand(
+        const char *command,
+        char expectedCommandCode,
+        String &value);
 
     IPAddress _address;
     uint16_t _port;
