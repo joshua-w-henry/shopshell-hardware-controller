@@ -10,6 +10,9 @@ for command in (
     '801s!001\\r',
     '801s6001\\r',
     '801s6000\\r',
+    '801s\\\"009\\r',
+    '801s\\\"004\\r',
+    '801gj000\\r',
 ):
     assert command in VIEWSONIC, f"Missing ViewSonic command {command}"
 
@@ -19,6 +22,9 @@ for route in (
     "/viewsonic/mute/off",
     "/viewsonic/power/on",
     "/viewsonic/standby",
+    "/viewsonic/input/status",
+    "/viewsonic/input/dp",
+    "/viewsonic/input/hdmi1",
     "/system/audio/bootstrap",
     "/system/startup/status",
     "/system/shutdown",
@@ -35,7 +41,7 @@ assert "MAX_QUEUE = 96" in KLIPSCH
 assert "viewSonic.setStandby()" in MAIN
 assert "acceptSuccessfulWriteWithoutReply" in VIEWSONIC
 assert '"sent_no_ack"' in VIEWSONIC
-assert "ShopShell_Hardware_Controller_v2.5" in MAIN
+assert "ShopShell_Hardware_Controller_v2.6" in MAIN
 
 # Cold-boot invariant: automatic audio bootstrap must not touch the
 # ViewSonic mute state. Manual mute routes remain available for diagnostics.
@@ -60,3 +66,4 @@ assert 'audioBootstrapStage = AudioBootstrapStage::SelectingKlipschOptical' in M
 print("PASS: ViewSonic + appliance boot/shutdown contract")
 print("  ViewSonic mute state untouched -> incremental 70-step Klipsch max -> Optical")
 print("  ViewSonic standby exposed for coordinated shutdown")
+print("  ViewSonic DP/HDMI1 set + input readback exposed")
