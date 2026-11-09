@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <stdlib.h>
 #include <IRrecv.h>
@@ -687,6 +688,9 @@ void processNetworkState()
 {
     if (WiFi.status() == WL_CONNECTED && !networkServicesStarted)
     {
+        ArduinoOTA.setHostname(HOSTNAME);
+        ArduinoOTA.begin();
+
         tcpServer.begin();
         tcpServer.setNoDelay(true);
         httpServer.begin();
@@ -694,6 +698,7 @@ void processNetworkState()
 
         Serial.printf("Hostname: %s\n", HOSTNAME);
         Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.println("Arduino OTA ready");
         Serial.printf("RS-232 TCP bridge listening on port %u\n", TCP_PORT);
         Serial.printf("HTTP API listening on port %u\n", HTTP_PORT);
     }
@@ -773,7 +778,10 @@ void loop()
     processAudioBootstrap();
 
     if (networkServicesStarted)
+    {
+        ArduinoOTA.handle();
         httpServer.handleClient();
+    }
 
     processTcpBridge();
     processUsbPassthrough();
