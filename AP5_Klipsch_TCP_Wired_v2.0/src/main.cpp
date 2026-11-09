@@ -10,7 +10,7 @@
 #include "KlipschWired.h"
 #include "ViewSonicLan.h"
 
-static constexpr char HOSTNAME[] = "promethean-shop";
+static constexpr char HOSTNAME[] = "esp32-shopshell";
 static constexpr uint16_t TCP_PORT = 2323;
 static constexpr uint16_t HTTP_PORT = 80;
 
