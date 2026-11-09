@@ -2,7 +2,7 @@
 
 **Firmware ID:** `ShopShell_Hardware_Controller_v2.6`  
 **Target:** ESP32 Dev Module, PlatformIO, Arduino / Espressif32 6.12.0  
-**Network hostname:** `promethean-shop`  
+**Network hostname:** `esp32-shopshell`  
 **Primary role:** local low-level hardware controller for the ShopShell station.
 
 This version is derived from the proven AP5 + wired Klipsch v2.0 baseline. The Promethean AP5-specific power and source commands are retired. The existing MAX3232 UART hardware remains available as a general RS-232 bridge on TCP port 2323.
@@ -198,7 +198,7 @@ Named command routes:
 1. Copy `src/secrets.h.example` to `src/secrets.h` if needed and enter the shop Wi-Fi credentials. Never commit `src/secrets.h`.
 2. Open the directory containing `platformio.ini` in VS Code / PlatformIO.
 3. For the first install or recovery, build/upload with the normal `esp32dev` environment over USB.
-4. After that USB flash, the controller advertises ArduinoOTA as `promethean-shop.local`.
+4. After that USB flash, the controller advertises ArduinoOTA as `esp32-shopshell.local`.
 5. Future wireless uploads can use the `esp32dev_ota` environment. If mDNS name resolution is unavailable, override the upload port with the controller's current IP address.
 6. Open Serial Monitor at 115,200 baud after USB flashing and confirm `Arduino OTA ready`, the assigned IP, the HDMI GPIO map, Klipsch RMT ready, and the two Dell/Input-1 source selections.
 7. Open the controller's `/health` endpoint and verify firmware `ShopShell_Hardware_Controller_v2.6`.
