@@ -197,11 +197,12 @@ Named command routes:
 
 1. Copy `src/secrets.h.example` to `src/secrets.h` if needed and enter the shop Wi-Fi credentials. Never commit `src/secrets.h`.
 2. Open the directory containing `platformio.ini` in VS Code / PlatformIO.
-3. Build and upload.
-4. Open Serial Monitor at 115,200 baud.
-5. Confirm startup messages show the HDMI GPIO map, Klipsch RMT ready, and two Dell/Input-1 source selections.
-6. Open `http://192.168.87.42/health` and verify firmware `ShopShell_Hardware_Controller_v2.6`.
-7. Use the standalone commissioning console in `tools/` to test each HDMI input and the existing Klipsch controls.
+3. For the first install or recovery, build/upload with the normal `esp32dev` environment over USB.
+4. After that USB flash, the controller advertises ArduinoOTA as `promethean-shop.local`.
+5. Future wireless uploads can use the `esp32dev_ota` environment. If mDNS name resolution is unavailable, override the upload port with the controller's current IP address.
+6. Open Serial Monitor at 115,200 baud after USB flashing and confirm `Arduino OTA ready`, the assigned IP, the HDMI GPIO map, Klipsch RMT ready, and the two Dell/Input-1 source selections.
+7. Open the controller's `/health` endpoint and verify firmware `ShopShell_Hardware_Controller_v2.6`.
+8. Use the standalone commissioning console in `tools/` to test each HDMI input and the existing Klipsch controls.
 
 ## Commissioning cautions
 
