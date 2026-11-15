@@ -13,6 +13,15 @@
 static constexpr char HOSTNAME[] = "esp32-shopshell";
 static constexpr uint16_t TCP_PORT = 2323;
 static constexpr uint16_t HTTP_PORT = 80;
+static constexpr uint32_t WIFI_DIAG_INTERVAL_MS = 10000;
+
+#ifdef LED_BUILTIN
+static constexpr int WIFI_STATUS_LED_PIN = LED_BUILTIN;
+static constexpr bool WIFI_STATUS_LED_AVAILABLE = true;
+#else
+static constexpr int WIFI_STATUS_LED_PIN = -1;
+static constexpr bool WIFI_STATUS_LED_AVAILABLE = false;
+#endif
 
 // General RS-232 bridge retained from the AP5 installation. It is no longer
 // used for display source selection, but remains available for future shop
@@ -98,6 +107,31 @@ void processIrReceiver()
 }
 
 bool networkServicesStarted = false;
+int lastWiFiStatus = -1;
+uint32_t lastWiFiDiagMs = 0;
+
+const char *wifiStatusName(wl_status_t status)
+{
+    switch (status)
+    {
+        case WL_IDLE_STATUS: return "idle";
+        case WL_NO_SSID_AVAIL: return "no_ssid_available";
+        case WL_SCAN_COMPLETED: return "scan_completed";
+        case WL_CONNECTED: return "connected";
+        case WL_CONNECT_FAILED: return "connect_failed";
+        case WL_CONNECTION_LOST: return "connection_lost";
+        case WL_DISCONNECTED: return "disconnected";
+        default: return "unknown";
+    }
+}
+
+void setWiFiStatusLed(bool connected)
+{
+    if (!WIFI_STATUS_LED_AVAILABLE)
+        return;
+
+    digitalWrite(WIFI_STATUS_LED_PIN, connected ? HIGH : LOW);
+}
 
 // HDMI switch command history. There is no feedback wire, so this records only
 // what the ESP32 commanded, not the physical selected source.
@@ -520,10 +554,13 @@ void configureHttpRoutes()
     {
         String json = "{";
         json += "\"ok\":true,";
-        json += "\"device\":\"promethean-shop\",";
+        json += "\"device\":\"" + String(HOSTNAME) + "\",";
         json += "\"role\":\"shopshell-hardware-controller\",";
         json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+        json += "\"wifi_status\":\"" + String(wifiStatusName(WiFi.status())) + "\",";
         json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+        json += "\"wifi_led_gpio\":" + String(WIFI_STATUS_LED_PIN) + ",";
+        json += "\"wifi_led_on\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
         json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.6\",";
@@ -677,16 +714,55 @@ void configureHttpRoutes()
 
 void beginWiFi()
 {
+    if (WIFI_STATUS_LED_AVAILABLE)
+    {
+        pinMode(WIFI_STATUS_LED_PIN, OUTPUT);
+        setWiFiStatusLed(false);
+        Serial.printf("WiFi status LED: GPIO%d (solid ON when connected)\n", WIFI_STATUS_LED_PIN);
+    }
+    else
+    {
+        Serial.println("WiFi status LED: no LED_BUILTIN defined for this board");
+    }
+
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(HOSTNAME);
     WiFi.setAutoReconnect(true);
+
+    Serial.printf("WiFi: connecting to SSID \"%s\" as %s\n", WIFI_SSID, HOSTNAME);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    lastWiFiDiagMs = millis();
 }
 
 void processNetworkState()
 {
-    if (WiFi.status() == WL_CONNECTED && !networkServicesStarted)
+    const wl_status_t status = WiFi.status();
+    setWiFiStatusLed(status == WL_CONNECTED);
+
+    if (static_cast<int>(status) != lastWiFiStatus)
+    {
+        Serial.printf("WiFi status: %s (%d)\n",
+                      wifiStatusName(status),
+                      static_cast<int>(status));
+        lastWiFiStatus = static_cast<int>(status);
+    }
+
+    if (status != WL_CONNECTED)
+    {
+        const uint32_t now = millis();
+        if (now - lastWiFiDiagMs >= WIFI_DIAG_INTERVAL_MS)
+        {
+            Serial.printf("WiFi: still waiting for \"%s\"; status=%s (%d)\n",
+                          WIFI_SSID,
+                          wifiStatusName(status),
+                          static_cast<int>(status));
+            lastWiFiDiagMs = now;
+        }
+        return;
+    }
+
+    if (!networkServicesStarted)
     {
         ArduinoOTA.setHostname(HOSTNAME);
         ArduinoOTA.begin();
@@ -698,6 +774,7 @@ void processNetworkState()
 
         Serial.printf("Hostname: %s\n", HOSTNAME);
         Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("WiFi RSSI: %d dBm, channel %d\n", WiFi.RSSI(), WiFi.channel());
         Serial.println("Arduino OTA ready");
         Serial.printf("RS-232 TCP bridge listening on port %u\n", TCP_PORT);
         Serial.printf("HTTP API listening on port %u\n", HTTP_PORT);
