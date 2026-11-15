@@ -31,7 +31,7 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
 <header>
   <div class="topline">
     <div><div class="eyebrow">ShopShell | Commissioning</div><h1>HDMI Switch + Klipsch Control Console</h1><p>Hardware Controller v2.2 · 3-input HDMI switch · Klipsch R-15PM wired NEC · Dell browser test tool</p></div>
-    <div class="connection"><div><label for="host">ESP32 address</label><div><input class="host" id="host" spellcheck="false" value="192.168.87.42" aria-label="ESP32 IP address or hostname"></div></div><button class="soft" id="healthTop">Open health</button></div>
+    <div class="connection"><div><label for="host">ESP32 address</label><div><input class="host" id="host" spellcheck="false" value="192.168.86.42" aria-label="ESP32 IP address or hostname"></div></div><button class="soft" id="healthTop">Open health</button></div>
   </div>
 </header>
 <main>
@@ -151,14 +151,14 @@ button:hover,.linkbtn:hover{background:#365780}button:active{transform:translate
   {group:'kOther', key:'k_led', name:'FRONT LED TOGGLE', path:'/klipsch/led', kind:'klipsch'}
  ];
  const $=id=>document.getElementById(id);
- const defaultData={results:{},events:[],notes:'',host:'192.168.87.42'};
+ const defaultData={results:{},events:[],notes:'',host:'192.168.86.42'};
  let data=defaultData;
  let latestUrl=''; let latestDiagnosticUrl='';
  let rampTimer=null,ramping=false;
  try { const stored=localStorage.getItem('shop_console_v2');if(stored){const parsed=JSON.parse(stored);if(parsed&&typeof parsed==='object')data={...defaultData,...parsed,results:parsed.results||{},events:parsed.events||[]};} } catch(_){}
- $('host').value=data.host||'192.168.87.42'; $('notes').value=data.notes||'';
+ $('host').value=data.host||'192.168.86.42'; $('notes').value=data.notes||'';
  function persist(){data.host=$('host').value;data.notes=$('notes').value;try{localStorage.setItem('shop_console_v2',JSON.stringify(data));}catch(_){}}
- function base(){const h=$('host').value.trim().replace(/^https?:\/\//,'').replace(/\/$/,'');if(!/^[a-z0-9.-]+(?::[0-9]{1,5})?$/i.test(h))throw Error('Use only an IP/hostname with optional port, e.g. 192.168.87.42');return 'http://'+h;}
+ function base(){const h=$('host').value.trim().replace(/^https?:\/\//,'').replace(/\/$/,'');if(!/^[a-z0-9.-]+(?::[0-9]{1,5})?$/i.test(h))throw Error('Use only an IP/hostname with optional port, e.g. 192.168.86.42');return 'http://'+h;}
  function log(message,type='request') {const event={time:new Date().toLocaleString(),type,message};data.events.unshift(event);data.events=data.events.slice(0,150);persist();drawLog();updateMetrics();}
  function drawLog(){const el=$('activity');el.textContent='';for(const e of data.events.slice(0,100)){const x=document.createElement('div');x.className=e.type==='pass'?'pass':e.type==='fail'?'fail':'muted';x.textContent=`[${e.time}] ${e.message}`;el.append(x);}if(!data.events.length)el.textContent='No tests submitted yet.';}
  function updateMetrics(){const vals=defs.map(c=>data.results[c.key]||'untested');$('passN').textContent=vals.filter(x=>x==='pass').length;$('failN').textContent=vals.filter(x=>x==='fail').length;$('todoN').textContent=vals.filter(x=>x==='untested').length;$('sentN').textContent=data.events.filter(x=>x.type==='request').length;}
