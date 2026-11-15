@@ -233,3 +233,9 @@ Named command routes:
 - The 70-step Klipsch ramp is fed incrementally and does not rely on the NEC queue being large enough to hold the entire sequence at once.
 - `POST /system/shutdown` places the ViewSonic into standby.
 - ShopShell OFF continues Windows shutdown even if ViewSonic standby fails.
+
+## Wi-Fi diagnostics and status LED
+
+The controller prints Wi-Fi association state changes to USB serial at 115200 baud without printing the Wi-Fi password. While disconnected it emits a status reminder every 10 seconds. On connection it reports the assigned IP, RSSI, channel, hostname, and OTA readiness.
+
+When the selected ESP32 board definition exposes `LED_BUILTIN`, that LED is used as a Wi-Fi status indicator: OFF while disconnected and solid ON while connected. The controller reports the selected LED GPIO during boot and exposes `wifi_status`, `wifi_led_gpio`, and `wifi_led_on` in `GET /health`.
