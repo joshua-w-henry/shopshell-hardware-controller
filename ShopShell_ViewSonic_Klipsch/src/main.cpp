@@ -10,6 +10,7 @@
 #include "KlipschWired.h"
 #include "ViewSonicLan.h"
 #include "ControllerConfig.h"
+#include <WayneEsp32Telemetry.h>
 
 static constexpr char HOSTNAME[] = "esp32-shopshell";
 static constexpr uint16_t TCP_PORT = 2323;
@@ -49,6 +50,15 @@ WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
 WebServer httpServer(HTTP_PORT);
 ViewSonicLanControl viewSonic(VIEWSONIC_IP, VIEWSONIC_TCP_PORT);
+WayneEsp32Telemetry telemetry;
+
+const WayneEsp32Telemetry::Sensor SHOP_TELEMETRY[] = {
+    {"viewsonic_last_result", "ViewSonic Last Command Result", nullptr, nullptr, nullptr},
+    {"klipsch_queue_depth", "Klipsch Command Queue", nullptr, nullptr, "measurement"},
+    {"audio_stage", "Audio Bootstrap Stage", nullptr, nullptr, nullptr}
+};
+
+void writeShopTelemetry(JsonObject state);
 
 // Optional optical IR receive diagnostic, independent of wired GPIO25 output.
 IRrecv irReceiver(IR_RX_PIN);
@@ -450,6 +460,15 @@ bool deadlineReached(uint32_t deadline)
     return static_cast<int32_t>(millis() - deadline) >= 0;
 }
 
+void writeShopTelemetry(JsonObject state)
+{
+    // This is last-command history, not an active recurring TCP probe.
+    state["viewsonic_last_result"] = viewSonic.lastCommand() == "none"
+        ? "not_tested" : (viewSonic.lastOk() ? "ok" : "failed");
+    state["klipsch_queue_depth"] = klipschQueueDepth();
+    state["audio_stage"] = audioBootstrapStageName();
+}
+
 void configureHttpRoutes()
 {
     httpServer.on("/health", HTTP_GET, []()
@@ -468,6 +487,9 @@ void configureHttpRoutes()
         json += "\"viewsonic_port\":" + String(VIEWSONIC_TCP_PORT) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
         json += "\"firmware\":\"" + String(FIRMWARE_ID) + "\",";
+        json += "\"mqtt_connected\":" + String(telemetry.connected() ? "true" : "false") + ",";
+        json += "\"mqtt_device_id\":\"" + telemetry.deviceId() + "\",";
+        json += "\"mqtt_state_topic\":\"" + telemetry.stateTopic() + "\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
@@ -722,12 +744,19 @@ void setup()
 
     configureHttpRoutes();
     beginWiFi();
+    // Shared telemetry self-identifies using the ESP32 Wi-Fi MAC address.
+    telemetry.begin(
+        {"ShopShell ViewSonic + Klipsch", HOSTNAME, FIRMWARE_ID,
+         MQTT_HOST, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD},
+        writeShopTelemetry, SHOP_TELEMETRY,
+        sizeof(SHOP_TELEMETRY) / sizeof(SHOP_TELEMETRY[0]));
 }
 
 void loop()
 {
     processNetworkState();
     processAudioBootstrap();
+    telemetry.loop(networkServicesStarted && WiFi.status() == WL_CONNECTED);
 
     if (networkServicesStarted)
     {

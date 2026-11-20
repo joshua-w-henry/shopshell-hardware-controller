@@ -11,12 +11,16 @@ Derived from the **v2.6 hardware-controller firmware** on `feature/hdmi-switch-c
 - Retained the existing **Klipsch R-15PM wired NEC interface on GPIO25** and the entire `/klipsch/*` API, 70-step incremental volume-up audio initialization followed by Optical selection, and the policy not to modify ViewSonic/Windows mute automatically. Keep Windows output at a safe level because the speaker gain is deliberately driven to maximum on boot.
 - Retained GPIO26 optical IR diagnostics, generic UART2/MAX3232 bridge on RX16/TX17 at 38400 baud with TCP port 2323, serial Wi-Fi diagnostics and LED, and ArduinoOTA.
 
+## Home Assistant device monitoring (new)
+
+The reusable `lib/WayneEsp32Telemetry` module publishes MAC-identified MQTT telemetry every 60 seconds to RTR Mosquitto (`192.168.86.24:1883`), with retained Home Assistant discovery, retained online/offline LWT, Wi-Fi RSSI/IP/hostname/SSID, uptime, firmware, reset reason, free heap, OTA state, plus last ViewSonic command result, Klipsch queue, and audio bootstrap state. It never commands display power or audio through MQTT. **Set the actual MQTT username and password locally in `src/secrets.h` before flashing.** See [Wayne telemetry guide](lib/WayneEsp32Telemetry/README.md).
+
 ## Addresses and USB flash
 
 The ViewSonic and ESP32 are **different IPs**. `192.168.86.33` accepted a TCP connection on port 5000, but that alone does not prove identity. Reserve its DHCP address after verification. The ESP32 will get its *own* IP on Shangri La; do not assume unlabeled `192.168.86.56` belongs to it.
 
 1. Open **`ShopShell_ViewSonic_Klipsch/`** (the folder containing `platformio.ini`) in VS Code.
-2. Copy `src/secrets.h.example` to `src/secrets.h`; enter the actual **Shangri La** password locally. Never commit secrets.h. If copying an old secrets.h, change the SSID.
+2. Copy `src/secrets.h.example` to `src/secrets.h`; enter the actual **Shangri La** password and RTR **MQTT username/password** locally. Never commit secrets.h. If copying an old secrets.h, change the SSID.
 3. Connect USB and flash `esp32dev` in PlatformIO, or run `pio run -e esp32dev -t upload`.
 4. Serial Monitor at **115200**: confirm v3.0 firmware ID, Wi-Fi connected, ESP32 assigned IP, and `Arduino OTA ready`. A disconnected unit logs Wi-Fi status every 10 seconds.
 5. Run `powershell -File tools/ReadOnly-Commission.ps1 -ControllerIp <actual-ESP32-IP>` or open `http://<actual-ESP32-IP>/health`. Verify the ViewSonic target in `/viewsonic/status` and read-only `/viewsonic/input/status`. Don't send power/standby commands until .86.33 is confirmed to be the right screen.

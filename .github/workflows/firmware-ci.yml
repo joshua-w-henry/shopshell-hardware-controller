@@ -37,3 +37,4 @@ jobs:
           python tests/test_nec_waveform.py
           python tests/test_no_external_hdmi.py
           python tests/test_appliance_contract.py
+          python tests/test_telemetry_contract.py
