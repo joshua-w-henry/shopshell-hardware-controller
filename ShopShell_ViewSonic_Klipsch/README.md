@@ -1,8 +1,8 @@
-# ShopShell ViewSonic + Klipsch Controller v3.1
+# ShopShell ViewSonic + Klipsch Controller v3.2
 
 Derived from the **v2.6 hardware-controller firmware** on `feature/hdmi-switch-controller`, not the older AP5 firmware on `main`.
 
-**Firmware:** `ShopShell_ViewSonic_Klipsch_v3.1` | **Hostname:** `esp32-shopshell` | **Network:** Shangri La (2.4 GHz) | **ViewSonic target (unconfirmed):** `192.168.86.33:5000`.
+**Firmware:** `ShopShell_ViewSonic_Klipsch_v3.2` | **Hostname:** `esp32-shopshell` | **Network:** Shangri La (2.4 GHz) | **ViewSonic panel-confirmed, DHCP-reserved address (control port not yet verified):** `192.168.86.81:5000`.
 
 ## Changes
 
@@ -17,13 +17,13 @@ The reusable `lib/WayneEsp32Telemetry` module publishes MAC-identified MQTT tele
 
 ## Addresses and USB flash
 
-The ViewSonic and ESP32 are **different IPs**. `192.168.86.33` accepted a TCP connection on port 5000, but that alone does not prove identity. Reserve its DHCP address after verification. The ESP32 will get its *own* IP on Shangri La; do not assume unlabeled `192.168.86.56` belongs to it.
+The ViewSonic and ESP32 are **different IPs**. The ViewSonic panel itself reported `192.168.86.81`, and that address is now DHCP-reserved as **ViewSonic Shop**. TCP control port 5000 has **not yet been tested** on this IP. Reserve its DHCP address after verification. The ESP32 will get its *own* IP on Shangri La; do not assume unlabeled `192.168.86.56` belongs to it.
 
 1. Open **`ShopShell_ViewSonic_Klipsch/`** (the folder containing `platformio.ini`) in VS Code.
 2. Copy `src/secrets.h.example` to `src/secrets.h`; enter the actual **Shangri La** password and RTR **MQTT username/password** locally. Never commit secrets.h. If copying an old secrets.h, change the SSID.
 3. Connect USB and flash `esp32dev` in PlatformIO, or run `pio run -e esp32dev -t upload`.
-4. Serial Monitor at **115200**: confirm v3.0 firmware ID, Wi-Fi connected, ESP32 assigned IP, and `Arduino OTA ready`. A disconnected unit logs Wi-Fi status every 10 seconds.
-5. Run `powershell -File tools/ReadOnly-Commission.ps1 -ControllerIp <actual-ESP32-IP>` or open `http://<actual-ESP32-IP>/health`. Verify the ViewSonic target in `/viewsonic/status` and read-only `/viewsonic/input/status`. Don't send power/standby commands until .86.33 is confirmed to be the right screen.
+4. Serial Monitor at **115200**: confirm v3.2 firmware ID, Wi-Fi connected, ESP32 assigned IP, and `Arduino OTA ready`. A disconnected unit logs Wi-Fi status every 10 seconds.
+5. Run `powershell -File tools/ReadOnly-Commission.ps1 -ControllerIp <actual-ESP32-IP>` or open `http://<actual-ESP32-IP>/health`. Verify the ViewSonic target in `/viewsonic/status` and read-only `/viewsonic/input/status`. Don't send power/standby commands until the read-only input-status query works through .86.81:5000.
 6. OTA later: `pio run -e esp32dev_ota -t upload`. Set `upload_port` to the confirmed ESP32 IP if `esp32-shopshell.local` does not resolve.
 
 ## API contract
