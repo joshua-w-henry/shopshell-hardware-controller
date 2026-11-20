@@ -1,8 +1,8 @@
-# ShopShell ViewSonic + Klipsch Controller v3.0
+# ShopShell ViewSonic + Klipsch Controller v3.1
 
 Derived from the **v2.6 hardware-controller firmware** on `feature/hdmi-switch-controller`, not the older AP5 firmware on `main`.
 
-**Firmware:** `ShopShell_ViewSonic_Klipsch_v3.0` | **Hostname:** `esp32-shopshell` | **Network:** Shangri La (2.4 GHz) | **ViewSonic target (unconfirmed):** `192.168.86.33:5000`.
+**Firmware:** `ShopShell_ViewSonic_Klipsch_v3.1` | **Hostname:** `esp32-shopshell` | **Network:** Shangri La (2.4 GHz) | **ViewSonic target (unconfirmed):** `192.168.86.33:5000`.
 
 ## Changes
 
