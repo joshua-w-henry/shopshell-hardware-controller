@@ -9,6 +9,8 @@
 #include "secrets.h"
 #include "KlipschWired.h"
 #include "ViewSonicLan.h"
+#include "ControllerConfig.h"
+#include <WayneEsp32Telemetry.h>
 
 static constexpr char HOSTNAME[] = "esp32-shopshell";
 static constexpr uint16_t TCP_PORT = 2323;
@@ -32,17 +34,6 @@ static constexpr uint32_t SERIAL_BAUD = 38400;
 
 static constexpr uint16_t IR_RX_PIN = 26; // optional optical receiver diagnostic
 
-// Amazon 3-input HDMI switch wired-remote emulation. The switch holds each
-// signal at ~3.27 V and a physical button pulls one signal to common/ground.
-// HIGH on these open-drain outputs means released/high-Z; LOW means pressed.
-static constexpr uint8_t HDMI_DELL_PIN = 27;  // remote pin 1: Input 1 / Dell / ShopShell
-static constexpr uint8_t HDMI_PS4_PIN = 32;   // remote pin 3: Input 2 / PS4
-static constexpr uint8_t HDMI_APPLE_PIN = 33; // remote pin 2: Input 3 / Apple TV
-static constexpr uint8_t HDMI_CYCLE_PIN = 21; // remote pin 4: Cycle
-static constexpr uint16_t HDMI_PRESS_MS = 160;
-static constexpr uint32_t STARTUP_HDMI_DELAY_MS = 3000;
-static constexpr uint32_t STARTUP_HDMI_REASSERT_DELAY_MS = 2500;
-
 // Appliance boot audio policy:
 // 1) leave ViewSonic / Windows mute state completely untouched,
 // 2) saturate the Klipsch internal gain at maximum,
@@ -58,7 +49,16 @@ HardwareSerial SerialBridge(2);
 WiFiServer tcpServer(TCP_PORT);
 WiFiClient tcpClient;
 WebServer httpServer(HTTP_PORT);
-ViewSonicLanControl viewSonic(IPAddress(192, 168, 87, 74));
+ViewSonicLanControl viewSonic(VIEWSONIC_IP, VIEWSONIC_TCP_PORT);
+WayneEsp32Telemetry telemetry;
+
+const WayneEsp32Telemetry::Sensor SHOP_TELEMETRY[] = {
+    {"viewsonic_last_result", "ViewSonic Last Command Result", nullptr, nullptr, nullptr},
+    {"klipsch_queue_depth", "Klipsch Command Queue", nullptr, nullptr, "measurement"},
+    {"audio_stage", "Audio Bootstrap Stage", nullptr, nullptr, nullptr}
+};
+
+void writeShopTelemetry(JsonObject state);
 
 // Optional optical IR receive diagnostic, independent of wired GPIO25 output.
 IRrecv irReceiver(IR_RX_PIN);
@@ -133,47 +133,6 @@ void setWiFiStatusLed(bool connected)
     digitalWrite(WIFI_STATUS_LED_PIN, connected ? HIGH : LOW);
 }
 
-// HDMI switch command history. There is no feedback wire, so this records only
-// what the ESP32 commanded, not the physical selected source.
-const char *hdmiLastAction = "none";
-uint32_t hdmiLastCommandMs = 0;
-uint32_t hdmiCommandCount = 0;
-
-void releaseAllHdmiSwitchLines()
-{
-    digitalWrite(HDMI_DELL_PIN, HIGH);
-    digitalWrite(HDMI_PS4_PIN, HIGH);
-    digitalWrite(HDMI_APPLE_PIN, HIGH);
-    digitalWrite(HDMI_CYCLE_PIN, HIGH);
-}
-
-void beginHdmiSwitch()
-{
-    digitalWrite(HDMI_DELL_PIN, HIGH);
-    digitalWrite(HDMI_PS4_PIN, HIGH);
-    digitalWrite(HDMI_APPLE_PIN, HIGH);
-    digitalWrite(HDMI_CYCLE_PIN, HIGH);
-    pinMode(HDMI_DELL_PIN, OUTPUT_OPEN_DRAIN);
-    pinMode(HDMI_PS4_PIN, OUTPUT_OPEN_DRAIN);
-    pinMode(HDMI_APPLE_PIN, OUTPUT_OPEN_DRAIN);
-    pinMode(HDMI_CYCLE_PIN, OUTPUT_OPEN_DRAIN);
-    releaseAllHdmiSwitchLines();
-    Serial.println("HDMI switch ready: GPIO27=Dell, GPIO32=PS4, GPIO33=Apple TV, GPIO21=Cycle");
-}
-
-void pulseHdmiSwitch(uint8_t pin, const char *action)
-{
-    releaseAllHdmiSwitchLines();
-    delay(2);
-    digitalWrite(pin, LOW);
-    delay(HDMI_PRESS_MS);
-    digitalWrite(pin, HIGH);
-    hdmiLastAction = action;
-    hdmiLastCommandMs = millis();
-    ++hdmiCommandCount;
-    Serial.printf("HDMI switch: %s (GPIO%u, %u ms)\n", action, pin, HDMI_PRESS_MS);
-}
-
 void sendJsonOk(const char *action)
 {
     String json = "{\"ok\":true,\"action\":\"";
@@ -181,11 +140,6 @@ void sendJsonOk(const char *action)
     json += "\"}";
     httpServer.send(200, "application/json", json);
 }
-
-void selectHdmiDell() { pulseHdmiSwitch(HDMI_DELL_PIN, "hdmi/input/1:dell"); }
-void selectHdmiPs4() { pulseHdmiSwitch(HDMI_PS4_PIN, "hdmi/input/2:ps4"); }
-void selectHdmiAppleTv() { pulseHdmiSwitch(HDMI_APPLE_PIN, "hdmi/input/3:apple-tv"); }
-void cycleHdmiInput() { pulseHdmiSwitch(HDMI_CYCLE_PIN, "hdmi/cycle"); }
 
 // Dynamic Klipsch HTTP API. Single canonical command table in KlipschWired.cpp.
 // GET for manual browser tests; POST for ShopShell and Home Assistant.
@@ -501,51 +455,18 @@ void processAudioBootstrap()
     }
 }
 
-enum class StartupStage
-{
-    WaitForHdmiSwitch,
-    WaitForDellReassert,
-    Complete
-};
-
-StartupStage startupStage = StartupStage::WaitForHdmiSwitch;
-uint32_t startupDeadlineMs = 0;
-
 bool deadlineReached(uint32_t deadline)
 {
     return static_cast<int32_t>(millis() - deadline) >= 0;
 }
 
-void beginStartupSequence()
+void writeShopTelemetry(JsonObject state)
 {
-    startupStage = StartupStage::WaitForHdmiSwitch;
-    startupDeadlineMs = millis() + STARTUP_HDMI_DELAY_MS;
-}
-
-void processStartupSequence()
-{
-    if (startupStage == StartupStage::Complete || !deadlineReached(startupDeadlineMs))
-        return;
-
-    switch (startupStage)
-    {
-        case StartupStage::WaitForHdmiSwitch:
-            Serial.println("Startup: HDMI switch -> Dell / Input 1");
-            selectHdmiDell();
-            startupStage = StartupStage::WaitForDellReassert;
-            startupDeadlineMs = millis() + STARTUP_HDMI_REASSERT_DELAY_MS;
-            break;
-
-        case StartupStage::WaitForDellReassert:
-            Serial.println("Startup: HDMI switch -> Dell / Input 1 (reassert)");
-            selectHdmiDell();
-            startupStage = StartupStage::Complete;
-            Serial.println("Startup source selection complete");
-            break;
-
-        case StartupStage::Complete:
-            break;
-    }
+    // This is last-command history, not an active recurring TCP probe.
+    state["viewsonic_last_result"] = viewSonic.lastCommand() == "none"
+        ? "not_tested" : (viewSonic.lastOk() ? "ok" : "failed");
+    state["klipsch_queue_depth"] = klipschQueueDepth();
+    state["audio_stage"] = audioBootstrapStageName();
 }
 
 void configureHttpRoutes()
@@ -562,42 +483,22 @@ void configureHttpRoutes()
         json += "\"wifi_led_gpio\":" + String(WIFI_STATUS_LED_PIN) + ",";
         json += "\"wifi_led_on\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
         json += "\"uptime_ms\":" + String(millis()) + ",";
+        json += "\"viewsonic_ip\":\"" + VIEWSONIC_IP.toString() + "\",";
+        json += "\"viewsonic_port\":" + String(VIEWSONIC_TCP_PORT) + ",";
         json += "\"serial_bridge_baud\":" + String(SERIAL_BAUD) + ",";
-        json += "\"firmware\":\"ShopShell_Hardware_Controller_v2.6\",";
+        json += "\"firmware\":\"" + String(FIRMWARE_ID) + "\",";
+        json += "\"mqtt_connected\":" + String(telemetry.connected() ? "true" : "false") + ",";
+        json += "\"mqtt_device_id\":\"" + telemetry.deviceId() + "\",";
+        json += "\"mqtt_state_topic\":\"" + telemetry.stateTopic() + "\",";
         json += "\"audio_bootstrap\":\"" + String(audioBootstrapStageName()) + "\"";
         json += "}";
         httpServer.send(200, "application/json", json);
     });
 
-    httpServer.on("/hdmi/status", HTTP_GET, []()
-    {
-        String json = "{\"ok\":true,";
-        json += "\"transport\":\"open_drain_button_emulation\",";
-        json += "\"button_ms\":" + String(HDMI_PRESS_MS) + ",";
-        json += "\"input1\":{\"name\":\"Dell / ShopShell\",\"gpio\":27,\"remote_pin\":1},";
-        json += "\"input2\":{\"name\":\"PS4\",\"gpio\":32,\"remote_pin\":3},";
-        json += "\"input3\":{\"name\":\"Apple TV\",\"gpio\":33,\"remote_pin\":2},";
-        json += "\"cycle\":{\"gpio\":21,\"remote_pin\":4},";
-        json += "\"common_remote_pin\":5,";
-        json += "\"last_action\":\"" + String(hdmiLastAction) + "\",";
-        json += "\"last_command_ms\":" + String(hdmiLastCommandMs) + ",";
-        json += "\"command_count\":" + String(hdmiCommandCount);
-        json += "}";
-        httpServer.send(200, "application/json", json);
-    });
-
-    httpServer.on("/hdmi/input/1", HTTP_POST, []() { selectHdmiDell(); sendJsonOk("hdmi/input/1"); });
-    httpServer.on("/hdmi/dell", HTTP_POST, []() { selectHdmiDell(); sendJsonOk("hdmi/dell"); });
-    httpServer.on("/hdmi/input/2", HTTP_POST, []() { selectHdmiPs4(); sendJsonOk("hdmi/input/2"); });
-    httpServer.on("/hdmi/ps4", HTTP_POST, []() { selectHdmiPs4(); sendJsonOk("hdmi/ps4"); });
-    httpServer.on("/hdmi/input/3", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/input/3"); });
-    httpServer.on("/hdmi/apple-tv", HTTP_POST, []() { selectHdmiAppleTv(); sendJsonOk("hdmi/apple-tv"); });
-    httpServer.on("/hdmi/cycle", HTTP_POST, []() { cycleHdmiInput(); sendJsonOk("hdmi/cycle"); });
-
     httpServer.on("/viewsonic/status", HTTP_GET, []()
     {
         String json = "{\"ok\":true,";
-        json += "\"address\":\"192.168.87.74:5000\",";
+        json += "\"address\":\"" + VIEWSONIC_IP.toString() + ":" + String(VIEWSONIC_TCP_PORT) + "\",";
         json += "\"last_ok\":" + String(viewSonic.lastOk() ? "true" : "false") + ",";
         json += "\"last_command\":\"" + viewSonic.lastCommand() + "\",";
         json += "\"last_reply\":\"" + viewSonic.lastReply() + "\",";
@@ -831,28 +732,31 @@ void setup()
 
     SerialBridge.begin(SERIAL_BAUD, SERIAL_8N1, SERIAL_RX, SERIAL_TX);
     beginKlipschWired(); // GPIO25 via 2N2222; active-low demodulated NEC on Klipsch data wire.
-    beginHdmiSwitch();
+    // External HDMI switch GPIO21/27/32/33 are not driven by this firmware.
     irReceiver.enableIRIn(); // GPIO26 optional optical 38 kHz receiver OUT (not wire loopback).
     Serial.println("Optional OPTICAL diagnostic receiver on GPIO26 (independent of wired TX)");
 
     Serial.println();
-    Serial.println("ShopShell hardware controller: HDMI + Klipsch + ViewSonic LAN v2.6");
+    Serial.printf("ShopShell ViewSonic + Klipsch (%s)\n", FIRMWARE_ID);
 
-    // Arm before Wi-Fi so startup never depends on network availability.
-    beginStartupSequence();
+    // Klipsch boot audio initializes locally, even without Wi-Fi.
     beginAudioBootstrap();
 
     configureHttpRoutes();
     beginWiFi();
+    // Shared telemetry self-identifies using the ESP32 Wi-Fi MAC address.
+    telemetry.begin(
+        {"ShopShell ViewSonic + Klipsch", HOSTNAME, FIRMWARE_ID,
+         MQTT_HOST, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD},
+        writeShopTelemetry, SHOP_TELEMETRY,
+        sizeof(SHOP_TELEMETRY) / sizeof(SHOP_TELEMETRY[0]));
 }
 
 void loop()
 {
-    // Local HDMI default-source startup has priority and works even with Wi-Fi down.
-    processStartupSequence();
-
     processNetworkState();
     processAudioBootstrap();
+    telemetry.loop(networkServicesStarted && WiFi.status() == WL_CONNECTED);
 
     if (networkServicesStarted)
     {
