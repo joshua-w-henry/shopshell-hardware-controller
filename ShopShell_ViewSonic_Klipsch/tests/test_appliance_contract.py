@@ -41,7 +41,8 @@ assert "MAX_QUEUE = 96" in KLIPSCH
 assert "viewSonic.setStandby()" in MAIN
 assert "acceptSuccessfulWriteWithoutReply" in VIEWSONIC
 assert '"sent_no_ack"' in VIEWSONIC
-assert "ShopShell_Hardware_Controller_v2.6" in MAIN
+assert "FIRMWARE_ID" in MAIN
+assert "ShopShell_ViewSonic_Klipsch_v3.0" in (ROOT / "src" / "ControllerConfig.h").read_text(encoding="utf-8")
 
 # Cold-boot invariant: automatic audio bootstrap must not touch the
 # ViewSonic mute state. Manual mute routes remain available for diagnostics.

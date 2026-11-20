@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: AP5_Klipsch_TCP_Wired_v2.0
+        working-directory: ShopShell_ViewSonic_Klipsch
 
     steps:
       - name: Check out repository
@@ -35,5 +35,5 @@ jobs:
       - name: Run protocol contract tests
         run: |
           python tests/test_nec_waveform.py
-          python tests/test_hdmi_contract.py
+          python tests/test_no_external_hdmi.py
           python tests/test_appliance_contract.py
