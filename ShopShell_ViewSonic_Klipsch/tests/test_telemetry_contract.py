@@ -24,7 +24,7 @@ for fragment in (
     '"wayne/esp32/"', '"online"', '"offline"',
     '"availability_topic"', '"value_template"',
     '"unique_id"', '"identifiers"', '"device_class"',
-    '"connected"', '"rssi_dbm"', '"free_heap_b"', '"uptime_s"',
+    '_mqtt.connected()', '"rssi_dbm"', '"free_heap_b"', '"uptime_s"',
     '"reset_reason"', '"ota_ready"', '"mac"', '"firmware"',
     'esp_timer_get_time()', 'WiFi.macAddress()', 'setSocketTimeout(2)',
     'setKeepAlive(20)', 'RETRY_MS', 'TELEMETRY_MS'

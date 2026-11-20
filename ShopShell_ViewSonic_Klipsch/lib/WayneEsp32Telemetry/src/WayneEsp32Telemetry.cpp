@@ -163,6 +163,7 @@ bool WayneEsp32Telemetry::publishJson(const String& topic, JsonDocument& doc) {
 
 bool WayneEsp32Telemetry::publishSensorDiscovery(const Sensor& sensor) {
     StaticJsonDocument<900> doc;
+    JsonObject root = doc.to<JsonObject>();
     const String entityId = _discoveryId + "_" + sensor.key;
     const String topic = "homeassistant/sensor/" + entityId + "/config";
     doc["name"] = sensor.name;
@@ -176,7 +177,7 @@ bool WayneEsp32Telemetry::publishSensorDiscovery(const Sensor& sensor) {
     if (sensor.unit) doc["unit_of_measurement"] = sensor.unit;
     if (sensor.deviceClass) doc["device_class"] = sensor.deviceClass;
     if (sensor.stateClass) doc["state_class"] = sensor.stateClass;
-    addDevice(doc.to<JsonObject>()); // Rebuild with root set before serialization.
+    addDevice(root);
     return publishJson(topic, doc);
 }
 
