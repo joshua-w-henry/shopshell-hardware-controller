@@ -47,7 +47,7 @@ assert "ShopShell_ViewSonic_Klipsch_v3.0" in (ROOT / "src" / "ControllerConfig.h
 # Cold-boot invariant: automatic audio bootstrap must not touch the
 # ViewSonic mute state. Manual mute routes remain available for diagnostics.
 bootstrap_start = MAIN.index("void processAudioBootstrap()")
-bootstrap_end = MAIN.index("enum class StartupStage", bootstrap_start)
+bootstrap_end = MAIN.index("void configureHttpRoutes()", bootstrap_start)
 bootstrap = MAIN[bootstrap_start:bootstrap_end]
 assert "setMute(" not in bootstrap
 assert "MutingViewSonic" not in bootstrap
