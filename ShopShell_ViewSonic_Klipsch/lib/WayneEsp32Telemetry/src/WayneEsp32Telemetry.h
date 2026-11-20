@@ -59,6 +59,7 @@ private:
     String _availabilityTopic;
     String _discoveryId;
     uint32_t _lastAttemptMs = 0;
+    uint32_t _lastDiscoveryAttemptMs = 0;
     uint32_t _lastStateMs = 0;
     bool _firstAttempt = true;
     bool _discoveryComplete = false;

@@ -99,14 +99,19 @@ void WayneEsp32Telemetry::loop(bool otaReady) {
         // Broker connection can happen after long Wi-Fi outage.
         _discoveryComplete = false;
         _lastStateMs = now;
+        _lastDiscoveryAttemptMs = now;
         _discoveryComplete = publishDiscovery();
         publishState(otaReady);
     }
 
     _mqtt.loop();
 
-    if (!_discoveryComplete)
+    // If broker publish fails, never spin on discovery every 1 ms.
+    if (!_discoveryComplete &&
+        uint32_t(millis() - _lastDiscoveryAttemptMs) >= RETRY_MS) {
+        _lastDiscoveryAttemptMs = millis();
         _discoveryComplete = publishDiscovery();
+    }
 
     if (uint32_t(millis() - _lastStateMs) >= TELEMETRY_MS) {
         _lastStateMs = millis();
